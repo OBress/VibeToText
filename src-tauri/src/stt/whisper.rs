@@ -1,52 +1,65 @@
-// Whisper backend powered by `ct2rs` (Rust bindings to OpenNMT's
-// CTranslate2). This is the same inference engine that
-// `faster-whisper` uses under the hood — and the reason that
-// project hits RTFx ~3-5× on CPU and ~30-50× on CUDA where
-// whisper.cpp on the same hardware tops out around 1× CPU.
+// Whisper backend powered by `ct2rs::sys::Whisper` directly (the
+// LOW-level ct2rs API). We dropped down from ct2rs's high-level
+// `Whisper` wrapper because:
 //
-// Architecture: a `WhisperBackend` owns one loaded `ct2rs::Whisper`
-// instance for the lifetime of the app. Audio buffered while the
-// user holds the dictate hotkey gets handed to it directly via a
-// `tokio::task::spawn_blocking` call — no sidecar process, no HTTP,
-// no WAV temp files. Transcript comes back as a `Vec<String>` and
-// we paste it.
+//   1. The high-level wrapper hides the prompt-token vector that
+//      gets passed to CTranslate2's C++ inference, so there's no
+//      way to inject `initial_prompt` for vocabulary biasing — the
+//      mechanism the reference Python project uses to teach
+//      Whisper project-specific jargon and proper nouns.
 //
-// Device + compute-type selection follows `cfg.backend_mode`:
-//   - "auto"  (default) → CUDA if `get_device_count(CUDA) > 0`,
-//                          else CPU.
-//   - "gpu"            → CUDA, error if no device.
-//   - "cpu"            → CPU.
+//   2. We want to run our own VAD before the mel spectrogram, and
+//      the high-level wrapper doesn't let us hook into the audio
+//      pipeline either.
 //
-// Compute type per device:
-//   - CUDA: FLOAT16 — what faster-whisper's CUDA path uses.
-//   - CPU:  INT8    — what faster-whisper's CPU fallback uses.
+// Trading complexity for control: we now own the mel spectrogram
+// computation (via the same `mel_spec` crate ct2rs uses), the
+// HuggingFace tokenizer (via `tokenizers`), and the prompt
+// construction. The `sys::Whisper` does the actual encoder +
+// decoder math, which is what we wanted from CTranslate2 anyway.
+//
+// Audio pipeline per dictation:
+//   raw f32 samples → VAD trim → mel spectrogram → encoder →
+//   decoder (with prompt = optional initial-prompt tokens +
+//   standard `<|sot|> <|en|> <|transcribe|> <|notimestamps|>`)
+//   → token ids → tokenizer.decode → text → hallucination
+//   filter → paste.
 
 use crate::audio::AudioCapture;
 use crate::config::AppConfig;
 use crate::inject;
 use crate::stt::SttBackend;
+use crate::vad;
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
-use ct2rs::sys::{get_device_count, ComputeType, Device, WhisperOptions};
-use ct2rs::{Config as CtConfig, Whisper};
-use std::path::PathBuf;
+use ct2rs::sys::{
+    get_device_count, ComputeType, Config as CtConfig, Device, StorageView,
+    Whisper as SysWhisper, WhisperOptions,
+};
+use mel_spec::mel::{log_mel_spectrogram, mel, norm_mel};
+use mel_spec::stft::Spectrogram;
+use ndarray::{s, stack, Array2, Axis};
+use serde::Deserialize;
+use std::fs::File;
+use std::io::BufReader;
+use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex as StdMutex,
 };
 use std::time::Duration;
 use tauri::AppHandle;
+use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 
-/// Patterns Whisper emits when it has nothing real to transcribe —
-/// the model was trained on subtitle data, so it produces these
-/// "fillers" on silent / noisy / music-only input. faster-whisper's
-/// reference implementation strips them; we do the same.
-///
-/// Match is case-insensitive on the trimmed transcript. We do
-/// EXACT-string match (after trim+lowercase) for the bracketed
-/// markers, and SUBSTRING match for the longer phrases — Whisper
-/// often surrounds them with extra punctuation.
+const SAMPLE_RATE: u32 = 16_000;
+/// CTranslate2's Whisper handles audio longer than 30 s by
+/// splitting it into chunks, but we cap the user's hold at 60 s
+/// to keep the in-memory buffer bounded.
+const MAX_SECONDS: f32 = 60.0;
+
+/// Hallucination patterns Whisper emits on quiet/non-speech input.
+/// Same list the previous implementation had — kept identical.
 const HALLUCINATION_EXACT: &[&str] = &[
     "[blank_audio]",
     "[ blank_audio ]",
@@ -73,9 +86,6 @@ const HALLUCINATION_EXACT: &[&str] = &[
     "♪♪",
     "♪♪♪",
 ];
-
-/// Substring-match patterns. These are YouTube/TED training residue
-/// that Whisper falls back to on quiet audio.
 const HALLUCINATION_CONTAINS: &[&str] = &[
     "thanks for watching",
     "thank you for watching",
@@ -83,41 +93,6 @@ const HALLUCINATION_CONTAINS: &[&str] = &[
     "subscribe to",
     "translated by",
 ];
-
-// (We requested `return_no_speech_prob=true` in WhisperOptions
-// hoping to filter on it, but ct2rs's high-level `Whisper::generate`
-// only returns the transcript strings — the no-speech probability
-// is computed but not surfaced. Falling back to text-pattern
-// hallucination filter only. To get the probability back we'd need
-// to drop down to `sys::Whisper::generate` and read
-// `WhisperGenerationResult.no_speech_prob` directly. Tracked as
-// future work alongside `initial_prompt` plumbing.)
-
-const SAMPLE_RATE: u32 = 16_000;
-// CTranslate2's Whisper transparently chunks audio longer than 30 s
-// internally (n_samples loop in ct2rs::Whisper::generate), so we no
-// longer need a hard cap here, but we keep one to bound the
-// in-memory buffer and the user's worst-case wait. 60 s is well
-// past any reasonable single-utterance dictation.
-const MAX_SECONDS: f32 = 60.0;
-
-pub struct WhisperBackend {
-    inner: Arc<WhisperInner>,
-    /// Stable name surfaced to the UI / analytics. Encodes both the
-    /// engine and the active device so we can tell at a glance which
-    /// path a given dictation took.
-    backend_label: &'static str,
-}
-
-struct WhisperInner {
-    whisper: Whisper,
-    /// CT2's Whisper is `Send + Sync` (verified in upstream
-    /// `unsafe impl`s), but `generate` performs internal mutable
-    /// state changes that aren't safe across true parallel calls.
-    /// Serialize them through a mutex. In practice we only ever
-    /// run one dictation at a time, so this is uncontended.
-    inflight: StdMutex<()>,
-}
 
 /// Resolved per-dictation device + compute + model triple. Returned
 /// by `resolve_runtime` so that stt.rs can download the right model
@@ -131,18 +106,16 @@ pub struct RuntimeChoice {
 
 /// Look at `cfg.backend_mode` plus the runtime CUDA probe and decide
 /// (a) which device we'll run on, (b) which compute_type matches,
-/// (c) which HF model id to download. Errors out for "gpu" mode
-/// when no CUDA device is visible — silently downgrading would
-/// surprise users who explicitly forced GPU.
+/// (c) which HF model id to download.
 pub fn resolve_runtime(cfg: &AppConfig) -> Result<RuntimeChoice> {
     let cuda_count = get_device_count(Device::CUDA);
     let cuda_ok = cuda_count > 0;
     log::info!("CT2 device probe: CUDA device_count={cuda_count}");
 
-    // GPU compute type: INT8_FLOAT16 (int8 weights, fp16 matmul).
-    // ~10-20% faster than plain FLOAT16 on small Whisper models
-    // because matmul is memory-bandwidth-bound; halving weight
-    // size halves the bandwidth needed. Quality cost: <0.5% WER.
+    // INT8_FLOAT16 on GPU: int8 weights, fp16 matmul. Faster than
+    // plain FLOAT16 on small Whisper models because matmul is
+    // memory-bandwidth-bound. <0.5% WER cost. Tensor Cores on
+    // Ampere+ NVIDIA accept this combo natively.
     let gpu_compute = ComputeType::INT8_FLOAT16;
 
     let pick_gpu = || RuntimeChoice {
@@ -169,21 +142,113 @@ pub fn resolve_runtime(cfg: &AppConfig) -> Result<RuntimeChoice> {
             Ok(pick_gpu())
         }
         "cpu" => Ok(pick_cpu()),
-        // "auto" or anything unrecognized → auto.
         _ => Ok(if cuda_ok { pick_gpu() } else { pick_cpu() }),
     }
 }
 
+// ---------------------------------------------------------------------------
+// PreprocessorConfig — same schema ct2rs uses, deserialized from
+// the synthesized `preprocessor_config.json` we wrote in models.rs.
+// We keep our own copy of this struct + parser because ct2rs's is
+// private to its `whisper` module.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug)]
+struct PreprocessorConfig {
+    feature_size: usize,
+    hop_length: usize,
+    n_fft: usize,
+    n_samples: usize,
+    nb_max_frames: usize,
+    sampling_rate: usize,
+    /// Pre-computed mel filter bank. Shape: (feature_size, n_fft/2+1).
+    /// We compute this from the simple integer params above on
+    /// load — `mel_spec::mel::mel(...)` is the same function ct2rs
+    /// calls internally.
+    mel_filters: Array2<f64>,
+}
+
+impl PreprocessorConfig {
+    fn read(path: &Path) -> Result<Self> {
+        #[derive(Deserialize)]
+        struct Aux {
+            feature_size: usize,
+            hop_length: usize,
+            n_fft: usize,
+            n_samples: usize,
+            nb_max_frames: usize,
+            sampling_rate: usize,
+        }
+        let file = File::open(path)
+            .with_context(|| format!("open {}", path.display()))?;
+        let aux: Aux = serde_json::from_reader(BufReader::new(file))
+            .with_context(|| format!("parse {}", path.display()))?;
+
+        // mel_spec::mel::mel computes the standard Whisper mel
+        // filter bank. Args: sample_rate, n_fft, n_mels, fmin (None
+        // = 0), fmax (None = sample_rate/2), htk (false = use slaney
+        // formula), norm (true = slaney normalization). These
+        // defaults match what ct2rs uses internally.
+        let mel_filters = mel(
+            aux.sampling_rate as f64,
+            aux.n_fft,
+            aux.feature_size,
+            None,
+            None,
+            false,
+            true,
+        );
+
+        Ok(Self {
+            feature_size: aux.feature_size,
+            hop_length: aux.hop_length,
+            n_fft: aux.n_fft,
+            n_samples: aux.n_samples,
+            nb_max_frames: aux.nb_max_frames,
+            sampling_rate: aux.sampling_rate,
+            mel_filters,
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// WhisperBackend — owns the loaded sys::Whisper, tokenizer, and
+// preprocessor config. Built once per app session and cached on
+// AppState.
+// ---------------------------------------------------------------------------
+
+pub struct WhisperBackend {
+    inner: Arc<WhisperInner>,
+    backend_label: &'static str,
+}
+
+struct WhisperInner {
+    whisper: SysWhisper,
+    tokenizer: Tokenizer,
+    config: PreprocessorConfig,
+    /// CTranslate2's per-decode state isn't safe to share across
+    /// concurrent generate() calls. In practice we only run one
+    /// dictation at a time, but the mutex is belt-and-suspenders.
+    inflight: StdMutex<()>,
+}
+
+// SAFETY: SysWhisper is `Send + Sync` (verified upstream).
+// Tokenizer is `Send + Sync`. PreprocessorConfig holds plain data.
+// StdMutex provides interior mutability for serialization.
+unsafe impl Send for WhisperInner {}
+unsafe impl Sync for WhisperInner {}
+
 impl WhisperBackend {
-    /// Load a CT2 Whisper model from `model_dir` using the device +
-    /// compute_type + label from a `RuntimeChoice`. Caller is
-    /// responsible for matching `model_dir` to `choice.model_id`.
+    /// Load a CT2 Whisper model from `model_dir`. Heavy work —
+    /// reads model.bin (~150 MB+), constructs the encoder graph,
+    /// allocates GPU buffers if device=CUDA. Caller should run
+    /// this on a blocking pool.
     pub async fn new(model_dir: PathBuf, choice: RuntimeChoice) -> Result<Self> {
         let RuntimeChoice {
             device,
             compute_type,
             label,
-            ..
+            model_id: _,
         } = choice;
         let threads = pick_thread_count(device);
         log::info!(
@@ -194,21 +259,29 @@ impl WhisperBackend {
             threads
         );
 
-        // Model load is heavy — runs on the blocking pool so we
-        // don't stall the Tokio runtime.
-        let model_dir_for_load = model_dir.clone();
-        let whisper = tokio::task::spawn_blocking(move || -> Result<Whisper> {
+        let model_dir_clone = model_dir.clone();
+        let inner = tokio::task::spawn_blocking(move || -> Result<WhisperInner> {
             let cfg = CtConfig {
                 device,
                 compute_type,
                 num_threads_per_replica: threads,
                 ..Default::default()
             };
-            Whisper::new(&model_dir_for_load, cfg).with_context(|| {
-                format!(
-                    "loading CT2 Whisper model from {}",
-                    model_dir_for_load.display()
-                )
+            let whisper = SysWhisper::new(&model_dir_clone, cfg).with_context(|| {
+                format!("loading sys::Whisper from {}", model_dir_clone.display())
+            })?;
+
+            let tokenizer = Tokenizer::from_file(model_dir_clone.join("tokenizer.json"))
+                .map_err(|e| anyhow!("loading tokenizer.json: {e}"))?;
+
+            let config =
+                PreprocessorConfig::read(&model_dir_clone.join("preprocessor_config.json"))?;
+
+            Ok(WhisperInner {
+                whisper,
+                tokenizer,
+                config,
+                inflight: StdMutex::new(()),
             })
         })
         .await
@@ -217,24 +290,19 @@ impl WhisperBackend {
         log::info!(
             "WhisperBackend ready: label={} sampling_rate={}",
             label,
-            whisper.sampling_rate()
+            inner.config.sampling_rate
         );
 
         Ok(Self {
-            inner: Arc::new(WhisperInner {
-                whisper,
-                inflight: StdMutex::new(()),
-            }),
+            inner: Arc::new(inner),
             backend_label: label,
         })
     }
 }
 
-/// Pick CT2's `num_threads_per_replica`. On CPU we want physical
-/// cores (HT siblings fight over the same SIMD pipeline; Intel
-/// hybrid CPUs put threads on slow E-cores). On GPU the value
-/// barely matters — CT2 mostly defers to cuBLAS — so we set it
-/// low to keep the host side responsive.
+/// Pick CT2's `num_threads_per_replica`. CPU: physical-core
+/// approximation, capped at 16. GPU: 1 (cuBLAS does the work,
+/// host threads barely matter).
 fn pick_thread_count(device: Device) -> usize {
     match device {
         Device::CUDA => 1,
@@ -242,20 +310,10 @@ fn pick_thread_count(device: Device) -> usize {
             let logical = std::thread::available_parallelism()
                 .map(|n| n.get())
                 .unwrap_or(4);
-            // Halve to approximate physical-core count (handles HT),
-            // then clamp to [2, 16]. The 16 ceiling matters because
-            // (a) past 16 threads the matmul has parallelism cliffs
-            // — synchronization overhead starts dominating speedup —
-            // and (b) the user wants the rest of their machine to
-            // stay responsive while transcription is in flight.
             (logical / 2).clamp(2, 16)
         }
     }
 }
-
-// (`pick_device` was replaced by `resolve_runtime` above — the
-// new API also returns the resolved HF model id so stt.rs can
-// download the right weights before constructing the backend.)
 
 #[async_trait]
 impl SttBackend for WhisperBackend {
@@ -311,61 +369,31 @@ impl SttBackend for WhisperBackend {
             return Ok(());
         }
 
-        let audio_seconds = buf.len() as f32 / SAMPLE_RATE as f32;
+        // 2) VAD: trim leading/trailing silence. Cuts encoder time
+        //    and prevents tail-silence hallucinations. Returns a
+        //    borrowed slice — no copy.
+        let trimmed = vad::trim_silence(&buf);
+        let trimmed_samples: Vec<f32> = trimmed.to_vec();
+        let audio_seconds = trimmed_samples.len() as f32 / SAMPLE_RATE as f32;
         log::info!("Whisper: transcribing {:.2}s of audio", audio_seconds);
 
-        // 2) Run CT2 inference on the blocking pool — generate() is
-        //    a synchronous CPU/GPU call that would otherwise block
-        //    the Tokio worker.
+        // 3) Build the optional initial_prompt text from
+        //    user-configured fields. Whisper conditions the decoder
+        //    on these tokens, biasing it toward project-specific
+        //    vocabulary the model wouldn't otherwise know how to
+        //    spell.
+        let initial_prompt = build_initial_prompt(&cfg);
+
+        // 4) Run inference on the blocking pool.
         let inner = self.inner.clone();
-        let started = std::time::Instant::now();
         let backend_label = self.backend_label;
+        let started = std::time::Instant::now();
         let text = tokio::task::spawn_blocking(move || -> Result<String> {
             let _g = inner
                 .inflight
                 .lock()
                 .map_err(|_| anyhow!("Whisper inflight mutex poisoned"))?;
-
-            // Dictation-tuned WhisperOptions. Defaults are calibrated
-            // for transcribing podcasts; we want low-latency single
-            // utterances. See the constants section above for the
-            // reasoning behind each value.
-            let opts = WhisperOptions {
-                // Greedy decode: ~3x faster than beam_size=5, with
-                // <0.3% WER cost on short clips. Standard tradeoff
-                // for dictation.
-                beam_size: 1,
-                // Bumped to 1.2 (from 1.1) because 1.1 sometimes
-                // wasn't enough to break Whisper's infinite-loop
-                // hallucinations on dictation tail-silence — the
-                // decoder would emit "the the the the…" all the way
-                // to max_length, taking 100+ seconds on CPU.
-                repetition_penalty: 1.2,
-                // Hard-block repeated 3-grams. Belt-and-suspenders
-                // against the same loop-hallucination pattern.
-                no_repeat_ngram_size: 3,
-                // Cap output at 224 tokens (default 448) so even if
-                // the decoder DOES get stuck in a loop, the worst-
-                // case wall time is bounded. 224 tokens is ~40 s of
-                // speech at typical dictation speed — well above any
-                // single utterance the user is likely to record.
-                max_length: 224,
-                ..WhisperOptions::default()
-            };
-
-            // Force English; saves the language-detect pass and
-            // matches the comparison project's behavior. If we ever
-            // expose multilingual support, plumb a config option
-            // through here.
-            let segments = inner
-                .whisper
-                .generate(&buf, Some("en"), false, &opts)
-                .map_err(|e| anyhow!("ct2 whisper generate: {e}"))?;
-            log::debug!(
-                "{backend_label}: {} segment(s) returned",
-                segments.len()
-            );
-            Ok(segments.join(" "))
+            transcribe_one(&inner, &trimmed_samples, initial_prompt.as_deref(), backend_label)
         })
         .await
         .map_err(|e| anyhow!("inference task: {e}"))??;
@@ -382,13 +410,6 @@ impl SttBackend for WhisperBackend {
             log::info!("Whisper: empty transcript");
             return Ok(());
         }
-
-        // Hallucination filter. Whisper has well-known training
-        // residue patterns it emits on silent / music / noisy
-        // input; faster-whisper strips these by default and so do
-        // we. Note: we DON'T paste these into the user's editor —
-        // pasting "[BLANK_AUDIO]" mid-sentence is one of the most
-        // annoying STT bugs a user can hit.
         if is_hallucination(&text) {
             log::info!("Whisper: dropping hallucinated output: {text:?}");
             return Ok(());
@@ -399,15 +420,224 @@ impl SttBackend for WhisperBackend {
         }
 
         crate::analytics::record_from_backend(&app, text.trim(), elapsed, "whisper").await;
-
         let _ = inject::paste_text(&app, &text);
         Ok(())
     }
 }
 
-/// True if the transcript matches one of Whisper's known
-/// hallucination patterns. Conservative on purpose — only filters
-/// patterns that are essentially never legitimate dictation.
+/// Synchronous inference path: mel spectrogram → encoder →
+/// decoder → text. Runs entirely on the calling thread (caller
+/// should already be inside `tokio::task::spawn_blocking`).
+fn transcribe_one(
+    inner: &WhisperInner,
+    samples: &[f32],
+    initial_prompt: Option<&str>,
+    backend_label: &str,
+) -> Result<String> {
+    let cfg = &inner.config;
+
+    // === Mel spectrogram ===
+    // Same algorithm ct2rs uses internally. For each `n_samples`
+    // chunk (30 s at 16 kHz = 480 000 samples), compute STFT then
+    // log-mel-spectrogram, normalize, and pack into an Array2 of
+    // shape (feature_size, nb_max_frames). Pad with zeros if the
+    // chunk is shorter than `n_samples`.
+    let mut stft = Spectrogram::new(cfg.n_fft, cfg.hop_length);
+    let mut mel_per_chunk: Vec<Array2<f32>> = Vec::new();
+
+    for chunk in samples.chunks(cfg.n_samples) {
+        let mut mel_chunk = Array2::<f32>::zeros((cfg.feature_size, cfg.nb_max_frames));
+        for (i, frame) in chunk.chunks(cfg.hop_length).enumerate() {
+            if let Some(fft_frame) = stft.add(frame) {
+                let mel = norm_mel(&log_mel_spectrogram(&fft_frame, &cfg.mel_filters))
+                    .mapv(|v| v as f32);
+                if i < cfg.nb_max_frames {
+                    mel_chunk
+                        .slice_mut(s![.., i])
+                        .assign(&mel.slice(s![.., 0]));
+                }
+            }
+        }
+        mel_per_chunk.push(mel_chunk);
+    }
+
+    if mel_per_chunk.is_empty() {
+        return Ok(String::new());
+    }
+
+    // Stack chunk-mels into a 3D array (n_chunks, feature_size,
+    // nb_max_frames). Ensure standard memory layout — CTranslate2's
+    // C++ side expects contiguous row-major.
+    let views: Vec<_> = mel_per_chunk.iter().map(|a| a.view()).collect();
+    let mut mel_3d = stack(Axis(0), &views)
+        .context("stacking mel spectrogram chunks")?;
+    if !mel_3d.is_standard_layout() {
+        mel_3d = mel_3d.as_standard_layout().into_owned();
+    }
+    let shape = mel_3d.shape().to_vec();
+
+    // === Encoder input as StorageView ===
+    let storage_view = StorageView::new(
+        &shape,
+        mel_3d
+            .as_slice_mut()
+            .ok_or_else(|| anyhow!("mel array not contiguous"))?,
+        Default::default(),
+    )
+    .map_err(|e| anyhow!("StorageView::new: {e}"))?;
+
+    // === Build prompt ===
+    // If we have an initial_prompt, tokenize it and prepend with
+    // the `<|startofprev|>` marker. Whisper's decoder treats this
+    // as "previous text" — it conditions on the tokens but doesn't
+    // re-emit them in the output.
+    //
+    // Standard Whisper prompt suffix: <|sot|> <|en|> <|transcribe|> <|notimestamps|>
+    let prompt_strings: Vec<String> = build_prompt_tokens(
+        &inner.tokenizer,
+        initial_prompt,
+        backend_label,
+    )?;
+
+    // === Decoder options ===
+    let opts = WhisperOptions {
+        beam_size: 1,
+        repetition_penalty: 1.2,
+        no_repeat_ngram_size: 3,
+        max_length: 224,
+        ..WhisperOptions::default()
+    };
+
+    // === Run ===
+    // sys::Whisper::generate takes one prompt per chunk in the mel
+    // batch. We use the same prompt for all chunks (clipped audio
+    // never reaches multi-chunk territory at our 60 s cap, but the
+    // API requires the vec).
+    let prompts: Vec<Vec<&str>> = (0..mel_per_chunk.len())
+        .map(|_| prompt_strings.iter().map(|s| s.as_str()).collect())
+        .collect();
+    let results = inner
+        .whisper
+        .generate(&storage_view, &prompts, &opts)
+        .map_err(|e| anyhow!("sys::Whisper::generate: {e}"))?;
+    log::debug!("{backend_label}: {} result chunk(s) returned", results.len());
+
+    // === Decode tokens to text ===
+    // Each result has `sequences_ids[0]` = generated token IDs
+    // (just the new tokens, NOT the prompt). Concatenate all chunks.
+    let mut full_text = String::new();
+    for res in results {
+        let Some(ids) = res.sequences_ids.into_iter().next() else {
+            continue;
+        };
+        let ids_u32: Vec<u32> = ids.into_iter().map(|x| x as u32).collect();
+        let text = inner
+            .tokenizer
+            .decode(&ids_u32, true)
+            .map_err(|e| anyhow!("tokenizer decode: {e}"))?;
+        if !full_text.is_empty() {
+            full_text.push(' ');
+        }
+        full_text.push_str(text.trim());
+    }
+    Ok(full_text)
+}
+
+/// Construct the prompt token-string vector that gets passed to
+/// `sys::Whisper::generate`. Format:
+///
+///   [<|startofprev|>, ...prev_tokens, <|sot|>, <|en|>, <|transcribe|>, <|notimestamps|>]
+///
+/// where `prev_tokens` are HF-tokenized BPE pieces of
+/// `initial_prompt`, omitted entirely if no initial_prompt was
+/// configured.
+fn build_prompt_tokens(
+    tokenizer: &Tokenizer,
+    initial_prompt: Option<&str>,
+    backend_label: &str,
+) -> Result<Vec<String>> {
+    let mut prompt: Vec<String> = Vec::new();
+
+    if let Some(text) = initial_prompt {
+        let trimmed = text.trim();
+        if !trimmed.is_empty() {
+            // Encode without adding the model's own special tokens
+            // (we add `<|startofprev|>` etc. ourselves below).
+            let encoded = tokenizer
+                .encode(trimmed, false)
+                .map_err(|e| anyhow!("tokenize initial_prompt: {e}"))?;
+            let pieces: Vec<String> = encoded
+                .get_tokens()
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
+
+            // Whisper's prompt is capped at 224 tokens (n_text_ctx
+            // / 2). Truncate if the user dumped a wall of text —
+            // keep the LAST N tokens since recent context tends to
+            // bias more strongly than earlier context.
+            const MAX_PROMPT_TOKENS: usize = 200;
+            let pieces = if pieces.len() > MAX_PROMPT_TOKENS {
+                let start = pieces.len() - MAX_PROMPT_TOKENS;
+                log::debug!(
+                    "{backend_label}: initial_prompt truncated from {} to {} tokens",
+                    pieces.len(),
+                    MAX_PROMPT_TOKENS
+                );
+                pieces.into_iter().skip(start).collect::<Vec<_>>()
+            } else {
+                pieces
+            };
+
+            log::debug!(
+                "{backend_label}: prepending {} prompt tokens for vocab biasing",
+                pieces.len()
+            );
+            prompt.push("<|startofprev|>".into());
+            prompt.extend(pieces);
+        }
+    }
+
+    prompt.push("<|startoftranscript|>".into());
+    prompt.push("<|en|>".into());
+    prompt.push("<|transcribe|>".into());
+    prompt.push("<|notimestamps|>".into());
+    Ok(prompt)
+}
+
+/// Combine `whisper_initial_prompt` (free-form text) with
+/// `custom_dictionary` (one word per line) into a single prompt
+/// string. Returns None if both are empty — saves us from
+/// tokenizing nothing.
+fn build_initial_prompt(cfg: &AppConfig) -> Option<String> {
+    let raw = cfg.whisper_initial_prompt.trim();
+    let dict = cfg
+        .custom_dictionary
+        .iter()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>();
+    if raw.is_empty() && dict.is_empty() {
+        return None;
+    }
+    let mut parts: Vec<String> = Vec::new();
+    if !raw.is_empty() {
+        parts.push(raw.to_string());
+    }
+    if !dict.is_empty() {
+        // Comma-separate the vocab list and embed it in a sentence
+        // that nudges Whisper to treat them as proper-noun
+        // vocabulary. Same shape the reference Python project uses.
+        parts.push(format!(
+            "Important vocabulary: {}.",
+            dict.join(", ")
+        ));
+    }
+    Some(parts.join(" "))
+}
+
+/// True if the transcript is one of Whisper's known training-set
+/// hallucination patterns we should silently drop.
 fn is_hallucination(text: &str) -> bool {
     let trimmed = text.trim().to_lowercase();
     if trimmed.is_empty() {
@@ -416,13 +646,6 @@ fn is_hallucination(text: &str) -> bool {
     if HALLUCINATION_EXACT.iter().any(|p| trimmed == *p) {
         return true;
     }
-    // For substring matches we want the WHOLE transcript to be
-    // basically just the hallucination — otherwise we'd drop a
-    // legitimate "thanks for watching the demo" mid-sentence.
-    // Heuristic: if a pattern is present AND the transcript is
-    // <60 chars, treat as hallucination. Real dictation longer
-    // than 60 chars containing "thanks for watching" is almost
-    // certainly intentional.
     if trimmed.len() < 60
         && HALLUCINATION_CONTAINS.iter().any(|p| trimmed.contains(p))
     {

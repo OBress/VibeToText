@@ -217,7 +217,8 @@
             <select id="whisper_model_gpu">
               <option value="Systran/faster-whisper-tiny.en">tiny.en — 40 MB · 14% WER</option>
               <option value="Systran/faster-whisper-base.en">base.en — 150 MB · 10% WER</option>
-              <option value="Systran/faster-whisper-small.en">small.en — 250 MB · 7% WER · default</option>
+              <option value="Systran/faster-whisper-small.en">small.en — 250 MB · 7% WER</option>
+              <option value="Systran/faster-whisper-medium.en">medium.en — 770 MB · 5.5% WER · default</option>
               <option value="Systran/faster-distil-whisper-large-v3">distil-large-v3 — 750 MB · 7.5% WER</option>
               <option value="Systran/faster-whisper-large-v3">large-v3 — 1.5 GB · 4.5% WER · best quality</option>
             </select>
@@ -249,17 +250,22 @@
         </div>
       </section>
 
-      <!-- Custom vocabulary: bounded width, marked WIP. -->
+      <!-- Custom vocabulary: feeds into Whisper's `initial_prompt`
+           to bias the decoder toward project-specific jargon. -->
       <section class="setting-card narrow">
-        <h2>Custom vocabulary <span class="muted small">— coming soon</span></h2>
-        <p class="hint small">Bias transcription toward project-specific jargon. Saved here, not yet applied at inference (ct2rs plumbing TBD).</p>
+        <h2>Custom vocabulary</h2>
+        <p class="hint small">
+          Bias transcription toward project-specific jargon, framework names, or proper nouns.
+          The text + word list are fed to Whisper as an <code>initial_prompt</code> (max ~200 tokens).
+          Recent context biases more strongly than earlier — keep prompts focused.
+        </p>
         <label>
-          <span>Initial prompt</span>
-          <textarea id="whisper_initial_prompt" rows="2" placeholder="e.g. Rust code, Tauri, ct2rs"></textarea>
+          <span>Initial prompt <span class="muted small">— full sentences work best</span></span>
+          <textarea id="whisper_initial_prompt" rows="2" placeholder="e.g. The speaker is dictating Rust code about Tauri, CTranslate2, and Whisper."></textarea>
         </label>
         <label>
           <span>Custom words <span class="muted small">— one per line</span></span>
-          <textarea id="custom_dictionary" rows="4" placeholder="Tauri&#10;ct2rs&#10;CTranslate2"></textarea>
+          <textarea id="custom_dictionary" rows="4" placeholder="Tauri&#10;ct2rs&#10;CTranslate2&#10;cuBLAS&#10;TensorCore"></textarea>
         </label>
       </section>
 

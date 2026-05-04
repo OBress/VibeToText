@@ -107,10 +107,12 @@ fn default_whisper_model_cpu() -> String {
 }
 
 fn default_whisper_model_gpu() -> String {
-    // small.en: 250 MB, ~7% WER. On GPU the latency difference vs
-    // base.en is negligible (<100 ms encoder), so we trade
-    // bandwidth for accuracy.
-    "Systran/faster-whisper-small.en".into()
+    // medium.en: 770 MB, ~5.5% WER. On a modern GPU the latency
+    // difference vs small.en (~7% WER) is sub-100 ms, well under
+    // user-perceptible — we trade VRAM/bandwidth for accuracy.
+    // On NVIDIA Tensor Cores the int8_float16 path makes this
+    // basically free vs the smaller models.
+    "Systran/faster-whisper-medium.en".into()
 }
 
 impl Default for AppConfig {

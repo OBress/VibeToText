@@ -21,6 +21,7 @@ mod models;
 #[cfg(target_os = "windows")]
 mod modifier_hook;
 mod stt;
+mod vad;
 
 use std::sync::Arc;
 use tauri::{
@@ -179,18 +180,39 @@ async fn whisper_model_present(
     Ok(models::whisper_already_downloaded(&app, &cfg))
 }
 
-/// Force-download (or re-download) the Whisper GGML weights now.
-/// Backs the first half of the "Download offline assets" button.
+/// Force-download (or re-download) Whisper model files now.
+/// Backs the "Download model" button in settings. Downloads
+/// whichever model(s) the current `backend_mode` could pick at
+/// runtime — for `auto` that's BOTH the CPU and GPU choices, so
+/// the user is prepared for either device.
 #[tauri::command]
 async fn download_whisper_model(
     app: tauri::AppHandle,
     state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<(), String> {
     let cfg = state.config.lock().await.clone();
-    models::ensure_whisper_ready(&app, &cfg)
-        .await
-        .map(|_| ())
-        .map_err(|e| e.to_string())
+    // Resolve which model id(s) to download based on backend_mode:
+    //   gpu → just the GPU pick
+    //   cpu → just the CPU pick
+    //   auto/_ → both (user might end up on either device)
+    let mode = cfg.backend_mode.to_ascii_lowercase();
+    let model_ids: Vec<String> = match mode.as_str() {
+        "gpu" | "cuda" => vec![cfg.whisper_model_gpu.clone()],
+        "cpu" => vec![cfg.whisper_model_cpu.clone()],
+        _ => {
+            let mut ids = vec![cfg.whisper_model_cpu.clone()];
+            if cfg.whisper_model_gpu != cfg.whisper_model_cpu {
+                ids.push(cfg.whisper_model_gpu.clone());
+            }
+            ids
+        }
+    };
+    for id in model_ids {
+        models::ensure_whisper_ready(&app, &cfg, &id)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 // (`download_whisper_cli` removed — the CT2-based backend has no

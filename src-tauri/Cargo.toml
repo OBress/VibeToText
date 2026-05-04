@@ -71,6 +71,19 @@ async-trait = "0.1"
 # fixed it.
 hf-hub = { version = "0.4", features = ["tokio"] }
 
+# Direct dependencies for the custom-dictionary plumbing. We drop
+# down to ct2rs's lower-level `sys::Whisper` API (since the
+# high-level Whisper wrapper hides the prompt construction) and
+# bring our own mel spectrogram + tokenizer to support
+# `initial_prompt` for vocab biasing. Versions PINNED to match
+# what ct2rs 0.9.x transitively uses, so cargo dedupes to a single
+# copy of each — bumping any of these to a newer major could
+# cause type-incompatibility with the StorageView / WhisperOptions
+# shapes ct2rs hands back.
+mel_spec = "0.3"
+ndarray = "0.16"
+tokenizers = { version = "0.22", default-features = false, features = ["onig"] }
+
 # --- Misc ---
 anyhow = "1"
 log = "0.4"
