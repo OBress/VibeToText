@@ -1,0 +1,60 @@
+# --- Rust / Cargo ---
+# target/ contains build artifacts including the giant compiled
+# CTranslate2 static lib (~10 GB total). Never commit.
+target/
+**/*.rs.bk
+**/Cargo.lock.bak
+
+# --- Node / npm ---
+node_modules/
+npm-debug.log
+yarn-error.log
+.pnpm-debug.log
+
+# --- Tauri ---
+src-tauri/gen/
+src-tauri/.tauri/
+src-tauri/WixTools/
+
+# --- Per-developer Cargo overrides ---
+# .cargo/config.toml lives in src-tauri/ and pins workarounds
+# (CUDA path, +crt-static) that NEED to be in version control —
+# don't ignore that one. We DO want to ignore any user-level
+# cargo state.
+**/.cargo/credentials.toml
+**/.cargo/.package-cache
+
+# --- IDE / editor ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# --- OS metadata ---
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Secrets / env ---
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# --- Claude Code internal state ---
+.claude/
+
+# --- Logs / cache ---
+*.log
+logs/
+
+# --- Build outputs ---
+dist/
+build/
+out/
+
+# --- Misc ---
+*.tmp
+.cache/

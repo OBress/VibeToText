@@ -1,0 +1,211 @@
+html, body {
+  margin: 0; padding: 0;
+  background: transparent;
+  color: #f1f3f7;
+  font-family: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, monospace;
+  font-size: 12px;
+  overflow: hidden;
+  height: 100%;
+  width: 100%;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+* { box-sizing: border-box; }
+
+.card {
+  position: absolute;
+  inset: 12px;
+  background: linear-gradient(140deg, rgba(18,20,26,0.85), rgba(24,17,14,0.85));
+  border: 1px solid rgba(255,120,73,0.28);
+  border-radius: 16px;
+  padding: 12px 16px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  /* Much softer drop shadow + tiny inner highlight; no outer glow.
+     The earlier shadow stack was too loud against light desktops. */
+  box-shadow:
+    0 8px 22px rgba(0,0,0,0.35),
+    0 0 0 1px rgba(255,255,255,0.025) inset;
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  animation: card-in 0.32s cubic-bezier(.2,.8,.2,1) both;
+}
+.card.leaving {
+  animation: card-out 0.22s cubic-bezier(.4,.0,.6,1) forwards;
+}
+@keyframes card-in {
+  from { transform: translateY(10px) scale(0.97); opacity: 0; }
+  to   { transform: none; opacity: 1; }
+}
+@keyframes card-out {
+  to { transform: translateY(6px) scale(0.97); opacity: 0; }
+}
+
+.row {
+  display: flex; align-items: center; gap: 12px;
+}
+
+.orb {
+  width: 16px; height: 16px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 30% 30%, #ffb185, #ff7849 60%, #cc4a1a);
+  box-shadow: 0 0 8px rgba(255,120,73,0.4);
+  position: relative;
+  flex-shrink: 0;
+}
+.orb::after {
+  content: "";
+  position: absolute; inset: -6px;
+  border-radius: 50%;
+  border: 1px solid rgba(255,120,73,0.32);
+  animation: ripple 1.6s ease-out infinite;
+}
+.orb-inner {
+  position: absolute; inset: 4px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.35);
+  filter: blur(2px);
+  animation: pulse 1.6s ease-in-out infinite;
+}
+@keyframes ripple {
+  0%   { transform: scale(0.6); opacity: 0.8; }
+  100% { transform: scale(1.7); opacity: 0; }
+}
+@keyframes pulse {
+  0%,100% { transform: scale(0.7); opacity: 0.55; }
+  50%     { transform: scale(1.05); opacity: 0.95; }
+}
+
+.label { line-height: 1.25; }
+.title {
+  font-size: 13px; font-weight: 600;
+  letter-spacing: 0.2px;
+  background: linear-gradient(90deg, #fff 0%, #ffd6c0 100%);
+  -webkit-background-clip: text; background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+.hint {
+  font-size: 10.5px;
+  color: rgba(241,243,247,0.55);
+  letter-spacing: 0.5px;
+  margin-top: 1px;
+}
+
+canvas {
+  width: 100%;
+  height: 60px;
+  display: block;
+}
+
+/* ---------- transcribing state ---------- */
+
+/* When we flip to transcribing: hide the canvas, show the spinner,
+   the orb stops pulsing and the border shifts cool. */
+.card.transcribing canvas { display: none; }
+.card.transcribing .spinner { display: flex; }
+
+.card.transcribing {
+  border-color: rgba(106, 169, 255, 0.32);
+  box-shadow:
+    0 8px 22px rgba(0,0,0,0.35),
+    0 0 0 1px rgba(255,255,255,0.025) inset;
+}
+
+/* Warming state: shown while the Whisper GGML weights are loading on a
+   cold press (and possibly downloading on first ever use). Hides the
+   canvas (no audio yet) and runs a subtle indeterminate shimmer. */
+.card.warming canvas { display: none; }
+.card.warming {
+  border-color: rgba(181, 139, 255, 0.45);
+}
+.card.warming .orb {
+  background: radial-gradient(circle at 30% 30%, #d9c5ff, #b58bff 60%, #7a4ed6);
+  box-shadow: 0 0 8px rgba(181, 139, 255, 0.5);
+}
+.card.warming .orb::after { border-color: rgba(181, 139, 255, 0.4); }
+.card.warming .title {
+  background: linear-gradient(90deg, #fff 0%, #e2cdff 100%);
+  -webkit-background-clip: text; background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+.card.warming::before {
+  content: "";
+  display: block;
+  height: 60px;
+  margin-top: 4px;
+  background: linear-gradient(
+    90deg,
+    rgba(181,139,255,0.04) 0%,
+    rgba(181,139,255,0.32) 50%,
+    rgba(181,139,255,0.04) 100%
+  );
+  background-size: 220% 100%;
+  border-radius: 8px;
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+@keyframes shimmer {
+  0%   { background-position:  100% 0; }
+  100% { background-position: -100% 0; }
+}
+
+/* Error state: red trim + visible-but-not-loud shadow. Triggered when
+   start_dictation returns Err (e.g. Whisper model download failed). */
+.card.errored {
+  border-color: rgba(255, 100, 100, 0.55);
+  box-shadow:
+    0 8px 22px rgba(0,0,0,0.35),
+    0 0 0 1px rgba(255,100,100,0.10) inset;
+}
+.card.errored canvas { display: none; }
+.card.errored .spinner { display: none; }
+.card.errored .orb {
+  background: radial-gradient(circle at 30% 30%, #ffb6b6, #ff6464 60%, #b03030);
+  box-shadow: 0 0 8px rgba(255, 100, 100, 0.45);
+}
+.card.errored .orb::after { border-color: rgba(255, 100, 100, 0.4); }
+.card.errored .title {
+  background: linear-gradient(90deg, #fff 0%, #ffd0d0 100%);
+  -webkit-background-clip: text; background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+.card.transcribing .orb {
+  background: radial-gradient(circle at 30% 30%, #c8dcff, #6aa9ff 60%, #2c5ec0);
+  box-shadow: 0 0 18px rgba(106,169,255,0.7);
+}
+.card.transcribing .orb::after {
+  border-color: rgba(106,169,255,0.5);
+}
+.card.transcribing .title {
+  background: linear-gradient(90deg, #fff 0%, #c8dcff 100%);
+  -webkit-background-clip: text; background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+/* Five-bar audio-equalizer-style spinner. */
+.spinner {
+  display: none;
+  height: 60px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding-top: 6px;
+}
+.spinner span {
+  display: inline-block;
+  width: 6px;
+  background: linear-gradient(180deg, #c8dcff, #6aa9ff);
+  border-radius: 3px;
+  animation: bounce 1.1s ease-in-out infinite;
+}
+.spinner span:nth-child(1) { height: 28px; animation-delay: -0.45s; }
+.spinner span:nth-child(2) { height: 38px; animation-delay: -0.30s; }
+.spinner span:nth-child(3) { height: 46px; animation-delay: -0.15s; }
+.spinner span:nth-child(4) { height: 38px; animation-delay:  0.00s; }
+.spinner span:nth-child(5) { height: 28px; animation-delay:  0.15s; }
+
+@keyframes bounce {
+  0%, 100% { transform: scaleY(0.35); opacity: 0.6; }
+  50%      { transform: scaleY(1.0);  opacity: 1.0; }
+}

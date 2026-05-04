@@ -1,0 +1,64 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "VibeToText",
+  "version": "0.1.0",
+  "identifier": "dev.vibetotext.app",
+  "build": {
+    "frontendDist": "../src"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "settings",
+        "title": "VibeToText — Dashboard",
+        "url": "index.html",
+        "width": 920,
+        "height": 800,
+        "minWidth": 720,
+        "minHeight": 600,
+        "resizable": true,
+        "visible": false,
+        "decorations": false,
+        "skipTaskbar": false,
+        "alwaysOnTop": false,
+        "transparent": false,
+        "backgroundColor": "#0b0c10",
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --enable-features=OverlayScrollbar,msOverlayScrollbarWinStyle,msOverlayScrollbarWinStyleAnimation"
+      },
+      {
+        "label": "overlay",
+        "title": "VibeToText — Listening",
+        "url": "overlay.html",
+        "width": 460,
+        "height": 130,
+        "resizable": false,
+        "visible": false,
+        "decorations": false,
+        "skipTaskbar": true,
+        "alwaysOnTop": true,
+        "transparent": true,
+        "shadow": false,
+        "focus": false,
+        "acceptFirstMouse": false,
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --enable-features=OverlayScrollbar,msOverlayScrollbarWinStyle,msOverlayScrollbarWinStyleAnimation"
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "category": "Productivity",
+    "shortDescription": "Local push-to-talk dictation",
+    "longDescription": "VibeToText captures your voice via a global hotkey and pastes the transcript wherever your cursor is. 100% on-device — powered by a statically linked whisper.cpp runtime with whisper-large-v3-turbo Q5."
+  }
+}

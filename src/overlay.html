@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>VibeToText — Listening</title>
+    <link rel="stylesheet" href="overlay.css" />
+  </head>
+  <body>
+    <div class="card" id="card">
+      <div class="row">
+        <div class="orb" id="orb"><div class="orb-inner"></div></div>
+        <div class="label">
+          <div class="title" id="title">Listening</div>
+          <div class="hint" id="elapsed">0.0s · release to send</div>
+        </div>
+      </div>
+      <canvas id="viz" width="900" height="120"></canvas>
+      <div class="spinner" id="spinner" aria-hidden="true">
+        <span></span><span></span><span></span><span></span><span></span>
+      </div>
+    </div>
+    <script src="overlay.js"></script>
+  </body>
+</html>

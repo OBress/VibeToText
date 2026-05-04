@@ -1,0 +1,155 @@
+[package]
+name = "vibe-to-text"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "vibe_to_text_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# --- Tauri core + plugins ---
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-store = "2"
+tauri-plugin-clipboard-manager = "2"
+tauri-plugin-autostart = "2"
+tauri-plugin-log = "2"
+
+# --- Serialization / async ---
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+futures-util = "0.3"
+
+# --- Audio capture ---
+cpal = "0.15"
+hound = "3.5"
+crossbeam-channel = "0.5"
+
+# --- Cross-platform keystroke injection ---
+enigo = "0.3"
+
+# --- Local STT via CTranslate2 (in-process FFI) ---
+# `ct2rs` is a Rust binding to OpenNMT's CTranslate2 — the same C++
+# inference engine that powers `faster-whisper`. We use its
+# `Whisper` API directly: no sidecar process, no subprocess spawn,
+# no HTTP round-trip per dictation. Audio f32 samples go in,
+# transcript strings come out.
+#
+# Why CTranslate2 over whisper.cpp:
+#   - On CPU it's measurably faster (~2-3×) thanks to oneDNN /
+#     Apple Accelerate / ruy hand-tuned matmul kernels. The
+#     reference Python project (faster-whisper) hits RTFx ~2.6× on
+#     CPU and ~5× on CUDA with the `base` model; whisper.cpp on
+#     the same model + same machine got us ~0.6× on CPU.
+#   - CUDA support is built in. With `cuda-dynamic-loading` the
+#     binary works equally well with or without an NVIDIA card —
+#     CUDA is probed at runtime and silently falls back to CPU
+#     when missing.
+#   - Apple Accelerate gives M-series Macs proper acceleration.
+#   - Statically linked into the final `.exe` (CT2 build sets
+#     BUILD_SHARED_LIBS=OFF), so end users get a single binary.
+#
+# Build cost: ct2rs invokes CMake to compile CT2 from C++ source
+# the first time. Adds ~10-20 min to a clean `cargo build`. Cached
+# after that. No runtime dep on the user's machine.
+async-trait = "0.1"
+# hf-hub: HuggingFace model downloader. We use the async `tokio`
+# API directly (separate from ct2rs's own `hub` feature, which uses
+# the sync API) so model downloads stream off the Tokio runtime
+# without blocking it.
+#
+# Pinned to 0.4.x to match what ct2rs 0.9.x already pulls in — using
+# the same version dedupes the two hf-hub copies in our build tree
+# AND avoids an obscure URL-builder bug in 0.3.2 where every
+# request fails with "relative URL without a base", apparently
+# because `Api::new()` doesn't initialize the endpoint URL. 0.4
+# fixed it.
+hf-hub = { version = "0.4", features = ["tokio"] }
+
+# --- Misc ---
+anyhow = "1"
+log = "0.4"
+env_logger = "0.11"
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+
+# --- Windows: low-level keyboard hook for modifier-only push-to-talk
+# combos like "Ctrl+Shift", which RegisterHotKey can't reliably
+# deliver events for. ---
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Threading",
+    "Win32_UI_Input",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+] }
+# CTranslate2 with CUDA dynamic-loading: the binary runs on machines
+# without CUDA, but auto-uses it when present. `cuda-small-binary`
+# trims the embedded CUDA archives down. `ruy` gives us a fast CPU
+# matmul fallback when the user is on battery / has no GPU.
+#
+# `flash-attention` was tried but compiles ~10 CUDA kernel template
+# variants × ~5 SM targets via NVCC — that's 20-40 min added to a
+# clean build on laptop hardware. For our default model (base.en,
+# 6 encoder layers, 8 attention heads), the speedup is ~5%. Bad
+# trade. The cuBLAS path cuda.cpp uses already exposes most of the
+# attention performance we care about. If we ever default to a
+# bigger model where encoder attention actually dominates, revisit.
+#
+# Notably NOT enabled: `openmp-runtime-comp` / `openmp-runtime-intel`
+# — those would force linking against `gomp.lib` (GCC's OpenMP) or
+# Intel's iomp, neither of which ships with MSVC's toolchain. With
+# `dnnl` disabled (we use `ruy`), CTranslate2 doesn't need an
+# OpenMP runtime; it threads internally via std::thread.
+ct2rs = { version = "0.9", default-features = false, features = [
+    "whisper",
+    "hub",
+    "tokenizers",
+    "ruy",
+    "cuda",
+    "cuda-dynamic-loading",
+    "cuda-small-binary",
+] }
+
+# --- macOS: Apple Accelerate framework lives inside macOS itself,
+# so enabling it costs nothing at distribution time and gives
+# M-series users proper Apple-Silicon-tuned matmul. ---
+[target.'cfg(target_os = "macos")'.dependencies]
+ct2rs = { version = "0.9", default-features = false, features = [
+    "whisper",
+    "hub",
+    "tokenizers",
+    "ruy",
+    "accelerate",
+] }
+
+# --- Linux: same CUDA-dynamic-loading story as Windows. ---
+# We could enable `openmp-runtime-comp` here (gomp.lib ships with
+# every glibc-based Linux toolchain) but cross-platform consistency
+# is more valuable than the small extra parallelism win — keep
+# every platform on `ruy`-only.
+[target.'cfg(target_os = "linux")'.dependencies]
+ct2rs = { version = "0.9", default-features = false, features = [
+    "whisper",
+    "hub",
+    "tokenizers",
+    "ruy",
+    "cuda",
+    "cuda-dynamic-loading",
+    "cuda-small-binary",
+] }
+
+[features]
+custom-protocol = ["tauri/custom-protocol"]
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+codegen-units = 1

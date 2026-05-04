@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>VibeToText — Dashboard</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header data-tauri-drag-region>
+      <div class="logo" data-tauri-drag-region>
+        <span class="dot"></span>
+        VibeToText
+      </div>
+      <nav class="tabs">
+        <button class="tab active" data-tab="dashboard">Dashboard</button>
+        <button class="tab" data-tab="settings">Settings</button>
+      </nav>
+      <div class="header-right" data-tauri-drag-region>
+        <div class="status" id="status">idle</div>
+        <div class="window-controls">
+          <button class="wctl" id="win_min" title="Minimize" aria-label="Minimize">
+            <svg width="10" height="10" viewBox="0 0 10 10"><path d="M0 5 L10 5" stroke="currentColor" stroke-width="1.2"/></svg>
+          </button>
+          <button class="wctl wctl-close" id="win_close" title="Close" aria-label="Close">
+            <svg width="10" height="10" viewBox="0 0 10 10"><path d="M1 1 L9 9 M9 1 L1 9" stroke="currentColor" stroke-width="1.2"/></svg>
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <!-- =========================== DASHBOARD =========================== -->
+    <main id="view-dashboard" class="view">
+      <section class="hero" id="hero_empty" style="display:none">
+        <div class="hero-empty">
+          <div class="hero-empty-icon">🎙️</div>
+          <h1>No dictations yet</h1>
+          <p>Press your dictate hotkey (default <code>Ctrl+Alt+D</code>) and start talking. Your stats will populate here in real time.</p>
+        </div>
+      </section>
+
+      <section class="hero" id="hero_stats">
+        <div class="kpi" data-tilt>
+          <div class="kpi-label">Time talking</div>
+          <div class="kpi-value" data-counter="duration">0<span class="kpi-unit">s</span></div>
+          <div class="kpi-sub" id="kpi_duration_sub">across 0 sessions</div>
+        </div>
+        <div class="kpi accent" data-tilt>
+          <div class="kpi-label">Words spoken</div>
+          <div class="kpi-value" data-counter="words">0</div>
+          <div class="kpi-sub" id="kpi_words_sub">— per minute average</div>
+        </div>
+        <div class="kpi" data-tilt>
+          <div class="kpi-label">Sessions</div>
+          <div class="kpi-value" data-counter="sessions">0</div>
+          <div class="kpi-sub" id="kpi_sessions_sub">avg 0s · longest 0s</div>
+        </div>
+        <div class="kpi" data-tilt>
+          <div class="kpi-label">Vocabulary</div>
+          <div class="kpi-value" data-counter="vocab">0</div>
+          <div class="kpi-sub" id="kpi_vocab_sub">unique words</div>
+        </div>
+      </section>
+
+      <section class="grid-2">
+        <div class="panel">
+          <h2>When you talk <span class="panel-meta" id="hourly_meta"></span></h2>
+          <div class="heatmap" id="hour_heatmap"></div>
+          <div class="heatmap-axis">
+            <span>12a</span><span>6a</span><span>12p</span><span>6p</span><span>11p</span>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h2>Last 7 days <span class="panel-meta" id="week_meta"></span></h2>
+          <div class="bars" id="week_bars"></div>
+        </div>
+      </section>
+
+      <section class="panel cloud-panel">
+        <h2>Word cloud <span class="panel-meta">most-used non-stopwords</span></h2>
+        <div class="cloud" id="word_cloud"></div>
+      </section>
+
+      <section class="grid-2">
+        <div class="panel">
+          <h2>Streaks</h2>
+          <div class="streak-row">
+            <div class="streak-card">
+              <div class="streak-num" id="streak_current">0</div>
+              <div class="streak-label">day streak 🔥</div>
+            </div>
+            <div class="streak-card">
+              <div class="streak-num" id="streak_longest">0</div>
+              <div class="streak-label">longest</div>
+            </div>
+            <div class="streak-card">
+              <div class="streak-num" id="streak_active">0</div>
+              <div class="streak-label">active days</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel insights-panel">
+          <h2>Insights</h2>
+          <ul class="insights" id="insights_list"></ul>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Recent dictations <span class="panel-meta" id="recent_meta"></span></h2>
+        <div class="recent" id="recent_list"></div>
+      </section>
+
+      <section class="footer-actions">
+        <button class="ghost" id="reset_analytics">Reset analytics</button>
+        <span class="hint" id="updated_at"></span>
+      </section>
+    </main>
+
+    <!-- =========================== SETTINGS =========================== -->
+    <main id="view-settings" class="view hidden">
+      <!-- Master toggle: single inline row, no separate big section. -->
+      <section class="setting-card">
+        <div class="row-inline">
+          <label class="toggle">
+            <input type="checkbox" id="stt_enabled" />
+            <span class="toggle-track"><span class="toggle-thumb"></span></span>
+            <span class="toggle-label">Speech-to-text enabled</span>
+          </label>
+          <span class="hint inline">When off, the dictation hotkey is silently ignored.</span>
+        </div>
+      </section>
+
+      <!-- Hotkeys + Behavior side-by-side. -->
+      <div class="settings-grid-2">
+        <section class="setting-card">
+          <h2>Hotkeys</h2>
+          <label>
+            <span>Open / hide settings</span>
+            <input id="toggle_settings_hotkey" class="hotkey-input" placeholder="click and press a combo" readonly />
+          </label>
+          <p id="hotkey_warn_settings" class="hint warn" style="display:none">
+            <span class="warn-text">⚠️ Same combo as the dictation hotkey — pick a different one.</span>
+            <button type="button" class="warn-close" aria-label="Dismiss warning">×</button>
+          </p>
+          <label>
+            <span>Push-to-talk (hold)</span>
+            <input id="dictate_hotkey" class="hotkey-input" placeholder="click and press a combo" readonly />
+          </label>
+          <p id="hotkey_warn_dictate" class="hint warn" style="display:none">
+            <span class="warn-text">⚠️ Same combo as the settings hotkey — pick a different one.</span>
+            <button type="button" class="warn-close" aria-label="Dismiss warning">×</button>
+          </p>
+          <label>
+            <span>Toggle STT on/off <span class="muted small">(optional)</span></span>
+            <input id="stt_toggle_hotkey" class="hotkey-input" placeholder="leave blank to disable" readonly />
+          </label>
+          <p class="hint small">Click a field, press keys. <code>Esc</code> cancels · <code>Backspace</code> resets to default.</p>
+        </section>
+
+        <section class="setting-card">
+          <h2>Behavior</h2>
+          <label class="checkbox">
+            <input type="checkbox" id="trailing_space" />
+            <span>Add trailing space after each utterance</span>
+          </label>
+          <label>
+            <span>Microphone</span>
+            <input id="mic_device" placeholder="(system default)" />
+          </label>
+          <label class="toggle compact">
+            <input type="checkbox" id="auto_start" />
+            <span class="toggle-track"><span class="toggle-thumb"></span></span>
+            <span class="toggle-label">Launch at login (starts in tray)</span>
+          </label>
+        </section>
+      </div>
+
+      <!-- Compute device + Model side-by-side. -->
+      <div class="settings-grid-2">
+        <section class="setting-card">
+          <h2>Compute device</h2>
+          <div class="radio-group compact">
+            <label class="radio">
+              <input type="radio" name="backend_mode" value="auto" />
+              <div>
+                <strong>Auto</strong>
+                <small>GPU if visible, else CPU</small>
+              </div>
+            </label>
+            <label class="radio">
+              <input type="radio" name="backend_mode" value="gpu" />
+              <div>
+                <strong>GPU only</strong>
+                <small>Force CUDA — error if no GPU</small>
+              </div>
+            </label>
+            <label class="radio">
+              <input type="radio" name="backend_mode" value="cpu" />
+              <div>
+                <strong>CPU only</strong>
+                <small>Skip GPU even if present</small>
+              </div>
+            </label>
+          </div>
+        </section>
+
+        <section class="setting-card">
+          <h2>Whisper model</h2>
+          <p class="hint small" id="model_picker_hint">
+            Different sizes trade WER vs latency. Each model downloads on first use into its own cache; switching back is instant.
+          </p>
+          <!-- GPU dropdown: visible when backend_mode is "auto" or "gpu". -->
+          <label id="model_picker_gpu_wrap">
+            <span>Model on GPU</span>
+            <select id="whisper_model_gpu">
+              <option value="Systran/faster-whisper-tiny.en">tiny.en — 40 MB · 14% WER</option>
+              <option value="Systran/faster-whisper-base.en">base.en — 150 MB · 10% WER</option>
+              <option value="Systran/faster-whisper-small.en">small.en — 250 MB · 7% WER · default</option>
+              <option value="Systran/faster-distil-whisper-large-v3">distil-large-v3 — 750 MB · 7.5% WER</option>
+              <option value="Systran/faster-whisper-large-v3">large-v3 — 1.5 GB · 4.5% WER · best quality</option>
+            </select>
+          </label>
+          <!-- CPU dropdown: visible when backend_mode is "auto" or "cpu". -->
+          <label id="model_picker_cpu_wrap">
+            <span>Model on CPU</span>
+            <select id="whisper_model_cpu">
+              <option value="Systran/faster-whisper-tiny.en">tiny.en — 40 MB · 14% WER · fastest</option>
+              <option value="Systran/faster-whisper-base.en">base.en — 150 MB · 10% WER · default</option>
+              <option value="Systran/faster-whisper-small.en">small.en — 250 MB · 7% WER</option>
+              <option value="Systran/faster-distil-whisper-large-v3">distil-large-v3 — 750 MB · 7.5% WER</option>
+              <option value="Systran/faster-whisper-large-v3">large-v3 — 1.5 GB · 4.5% WER · slow on CPU</option>
+            </select>
+          </label>
+        </section>
+      </div>
+
+      <!-- Model files: compact card. -->
+      <section class="setting-card narrow">
+        <h2>Model files</h2>
+        <div class="row-inline">
+          <p class="hint small inline" id="whisper_status">Status: checking…</p>
+          <button id="download_whisper" class="secondary small">Download model</button>
+        </div>
+        <div id="whisper_progress_wrap" style="display:none; margin-top:10px;">
+          <div class="progress"><div class="progress-bar" id="whisper_progress_bar"></div></div>
+          <p class="hint small" id="whisper_progress_label">starting…</p>
+        </div>
+      </section>
+
+      <!-- Custom vocabulary: bounded width, marked WIP. -->
+      <section class="setting-card narrow">
+        <h2>Custom vocabulary <span class="muted small">— coming soon</span></h2>
+        <p class="hint small">Bias transcription toward project-specific jargon. Saved here, not yet applied at inference (ct2rs plumbing TBD).</p>
+        <label>
+          <span>Initial prompt</span>
+          <textarea id="whisper_initial_prompt" rows="2" placeholder="e.g. Rust code, Tauri, ct2rs"></textarea>
+        </label>
+        <label>
+          <span>Custom words <span class="muted small">— one per line</span></span>
+          <textarea id="custom_dictionary" rows="4" placeholder="Tauri&#10;ct2rs&#10;CTranslate2"></textarea>
+        </label>
+      </section>
+
+      <!-- Auto-save: any change persists immediately. The header status
+           pill shows a brief green checkmark when a save lands. -->
+    </main>
+
+    <script src="main.js"></script>
+  </body>
+</html>

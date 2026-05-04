@@ -1,0 +1,37 @@
+# Workaround for ct2rs's CUDA build on Windows + CMake 3.28+:
+#
+# CMake's deprecated FindCUDA module (which ct2rs's CMake config
+# still uses) chokes on Windows paths containing `\P` because it
+# interprets the backslash sequence as a string escape. The NVIDIA
+# CUDA installer sets CUDA_PATH with backslashes by default, e.g.
+# `C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.5`, which
+# trips this bug at the `\P` of `\Program Files`.
+#
+# Rewriting CUDA_PATH with forward slashes side-steps the parser
+# bug. CMake handles forward slashes on Windows just fine — they're
+# the recommended form across all platforms.
+#
+# `force = true` makes this win against any pre-existing env var
+# from the user's shell.
+#
+# On macOS / Linux this entry is harmless: ct2rs's `cuda_root()`
+# falls back to other env vars and standard paths, and ultimately
+# to the existence check `path.join("include/cuda.h").is_file()`,
+# which fails for a Windows path on a Unix system.
+[env]
+CUDA_PATH = { value = "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5", force = true }
+CUDA_TOOLKIT_ROOT_DIR = { value = "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5", force = true }
+
+# Force Rust to use the STATIC C runtime (`/MT`) on Windows MSVC.
+# Required because ct2rs builds CTranslate2's C++ with `static_crt(true)`
+# in its build.rs — the linker refuses to mix MT-built objects (CT2)
+# with MD-built objects (default Rust). Setting this rustflag puts
+# Rust on the MT side of the fence so the link succeeds.
+#
+# Side benefit: end-user .exe doesn't depend on `MSVCP140.dll` /
+# `VCRUNTIME140.dll` from the VC++ redistributable, since the C++
+# runtime is statically linked into our binary.
+#
+# Only affects Windows MSVC. macOS / Linux ignore this entry.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
