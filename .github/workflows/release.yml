@@ -77,6 +77,7 @@ jobs:
             librsvg2-dev \
             patchelf \
             libasound2-dev \
+            libxdo-dev \
             cmake
 
       # CT2 needs CUDA headers at COMPILE time even with the
@@ -113,13 +114,20 @@ jobs:
 
       - name: Install CUDA Toolkit (Windows)
         if: runner.os == 'Windows'
+        # CUDA 12.5's Windows installer crashes on GH-hosted runners
+        # with the cryptic exit code 3772776473 (0xE0E1A019),
+        # regardless of `method: local` vs `network`. Pinned to
+        # 11.8.0 instead — older but the installer is rock-solid on
+        # GH runners. We get nvcc + cudart + cublas dev headers,
+        # which is everything ct2rs's CUDA-dynamic-loading code path
+        # needs at compile time. The resulting binary still works
+        # against the user's CUDA at runtime regardless of version
+        # (dynamic loading resolves whatever's on the system).
         uses: Jimver/cuda-toolkit@v0.2.19
         with:
-          cuda: "12.5.0"
+          cuda: "11.8.0"
           method: "local"
-          # Same `toolkit` rationale as Linux: avoid the per-
-          # subpackage name fragility.
-          sub-packages: '["toolkit"]'
+          sub-packages: '["nvcc", "cudart", "cublas", "cublas_dev"]'
 
       # CT2's CMake config uses the deprecated FindCUDA module, which
       # mis-parses Windows paths containing backslash-P (it treats
