@@ -1,0 +1,176 @@
+name: Release
+
+# Triggers a cross-platform binary build and attaches the resulting
+# installers to a GitHub Release. Run by:
+#   1. pushing a tag matching `v*` (e.g. `v0.1.0`) — produces a draft
+#      release with auto-generated notes that a maintainer reviews
+#      and publishes manually.
+#   2. dispatching the workflow manually from the Actions tab — useful
+#      for one-off rebuilds without bumping a tag.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+# Concurrency control: a second push to the same tag (rare, but
+# possible during retries) cancels the in-flight run instead of
+# racing it.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Windows — NSIS installer + MSI. The matrix uses `windows-latest`
+          # which is currently `windows-2022` (msvc 14.40+, perfectly fine
+          # for the sherpa-onnx `shared` build path we use here).
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            bundles: nsis,msi
+            artifact_name: vibe-to-text-windows-x64
+
+          # macOS arm64 (Apple silicon). `macos-latest` is currently a
+          # M-series runner.
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            bundles: dmg
+            artifact_name: vibe-to-text-macos-arm64
+
+          # macOS x86_64 — older Intel Macs. `macos-13` is the last
+          # GH-hosted Intel runner generation as of 2025.
+          - os: macos-13
+            target: x86_64-apple-darwin
+            bundles: dmg
+            artifact_name: vibe-to-text-macos-x64
+
+          # Linux x86_64 — both `.deb` for Debian/Ubuntu and `.AppImage`
+          # for distro-agnostic install. Build runs against
+          # ubuntu-22.04 to keep glibc compatibility broad.
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            bundles: deb,appimage
+            artifact_name: vibe-to-text-linux-x64
+
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux build deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libasound2-dev \
+            cmake
+
+      - name: Install macOS build deps
+        if: runner.os == 'macOS'
+        run: |
+          # cmake is preinstalled on the GH-hosted macOS runners; this
+          # is a no-op or a quick upgrade. Listed for clarity.
+          brew list cmake >/dev/null 2>&1 || brew install cmake
+
+      - name: Install Windows build deps
+        if: runner.os == 'Windows'
+        run: |
+          # Visual Studio 2022 (incl. msvc + Windows SDK) and CMake
+          # are preinstalled on `windows-latest`. Sanity-check + log
+          # the installed versions so build failures are diagnosable.
+          cmake --version
+          cl.exe 2>&1 | Select-String "Microsoft" | Select-Object -First 1
+        shell: pwsh
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # Cache the cargo registry + the target directory. CT2 + sherpa-onnx
+      # together compile a lot of C++ via CMake on the first build (~25 min
+      # on Linux, ~35 min on Windows); the cache cuts incremental rebuilds
+      # to ~5 min.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ${{ matrix.target }}-release
+          # Cache the C++ build outputs too (target/release/build/) since
+          # those are the slow ones to recreate.
+          cache-targets: true
+          cache-on-failure: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Build app (release)
+        run: npm run tauri -- build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+
+      - name: Collect bundle artifacts
+        # The Tauri bundler drops its output into target/<triple>/release/bundle/<format>/.
+        # Copy everything into a flat staging dir for the upload.
+        shell: bash
+        run: |
+          set -e
+          mkdir -p artifacts
+          shopt -s nullglob globstar
+          for f in src-tauri/target/${{ matrix.target }}/release/bundle/**/*.{msi,exe,dmg,AppImage,deb}; do
+            cp -v "$f" artifacts/
+          done
+          ls -la artifacts/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: artifacts/*
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: List collected artifacts
+        run: ls -la artifacts/
+
+      - name: Create draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          # Always start as a draft — a human reviews + publishes manually
+          # after smoke-testing the binaries on real hardware.
+          draft: true
+          generate_release_notes: true
+          name: ${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}
+          files: artifacts/*
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

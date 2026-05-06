@@ -1,0 +1,79 @@
+name: CI
+
+# Fast checks on PRs and pushes to main. Skips the heavy `tauri build`
+# step (the C++ compile of CT2 + sherpa-onnx is ~25-35 min) — those
+# go through the release workflow when we're actually shipping. CI
+# here is just `cargo check` + clippy + fmt + the JS lint, intended
+# to fail-fast on most regressions in <5 min once the cache is warm.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    name: Rust check
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libasound2-dev \
+            cmake
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt,clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ci-rust
+
+      # `cargo fmt --check` is the cheapest gate — runs in seconds.
+      # We run it first so a fmt-only PR fails fast without paying
+      # the C++ compile cost.
+      - name: cargo fmt --check
+        working-directory: src-tauri
+        run: cargo fmt -- --check
+
+      - name: cargo check
+        working-directory: src-tauri
+        run: cargo check --all-targets
+
+      - name: cargo clippy
+        working-directory: src-tauri
+        run: cargo clippy --all-targets -- -D warnings
+
+  frontend:
+    name: Frontend check
+    runs-on: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      - run: npm ci
+      # No formal lint setup yet — at least verify the package
+      # installs cleanly and the JS files parse via node's syntax
+      # check (covers the most common "unmatched brace" mistake).
+      - run: |
+          for f in src/*.js; do
+            node --check "$f"
+          done

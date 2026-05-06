@@ -4,7 +4,8 @@
   "version": "0.1.0",
   "identifier": "dev.vibetotext.app",
   "build": {
-    "frontendDist": "../src"
+    "frontendDist": "../src",
+    "beforeBundleCommand": "node ../scripts/stage-bundle-resources.cjs"
   },
   "app": {
     "withGlobalTauri": true,
@@ -57,8 +58,26 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "resources": [
+      "bundle-resources/*"
+    ],
     "category": "Productivity",
     "shortDescription": "Local push-to-talk dictation",
-    "longDescription": "VibeToText captures your voice via a global hotkey and pastes the transcript wherever your cursor is. 100% on-device — Whisper (CTranslate2, GPU/CPU) + Moonshine base-en (sherpa-onnx, CPU). The sherpa-onnx + onnxruntime DLLs are auto-copied next to the .exe by sherpa-onnx-sys's build script; Tauri's installer picks them up from target/{profile}/ alongside vibe-to-text.exe."
+    "longDescription": "VibeToText captures your voice via a global hotkey and pastes the transcript wherever your cursor is. 100% on-device — Whisper (CTranslate2, GPU/CPU) + Moonshine base-en (sherpa-onnx, CPU).",
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "displayLanguageSelector": false,
+        "installerIcon": "icons/icon.ico"
+      }
+    },
+    "macOS": {
+      "minimumSystemVersion": "11.0"
+    },
+    "linux": {
+      "deb": {
+        "depends": ["libwebkit2gtk-4.1-0", "libgtk-3-0"]
+      }
+    }
   }
 }

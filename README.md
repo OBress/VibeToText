@@ -1,87 +1,154 @@
 # VibeToText
 
-Local push-to-talk dictation for Windows / macOS / Linux. Hold a global hotkey, speak, release — your transcript is pasted at the cursor, wherever you are (Slack, VS Code, browser, terminal, anywhere that accepts text). All inference is on-device — no API key, no network round trip.
+Local push-to-talk dictation for **Windows / macOS / Linux**. Hold a
+global hotkey, speak, release — your transcript pastes at the cursor,
+wherever you are (Slack, VS Code, browser, terminal, anywhere that
+accepts text). Inference is 100 % on-device — no API key, no network
+round-trip, no audio leaves your machine.
 
-## Speed (real measurements on a Lenovo Legion + RTX 30/40-class GPU)
+[**Download the latest release →**](https://github.com/OBress/VibeToText/releases/latest)
 
-| Mode | RTFx | Latency on 2.6 s clip |
-|---|---|---|
-| GPU (CUDA + INT8_FLOAT16) | 5-9× | 0.3-0.5 s |
-| CPU (INT8 + 16 threads) | 1-2× | 1-3 s |
+---
 
-The app is designed around **push-to-talk** — you hold the hotkey while speaking and release to send.
+## Install
 
-## Architecture
+### Windows
 
-- **Tauri 2** desktop shell — Rust backend, WebView2/WebKit frontend, persistent settings + analytics windows.
-- **Hotkey capture** — `tauri-plugin-global-shortcut` for normal combos, plus a Windows Raw Input listener for modifier-only hotkeys like `Ctrl+Shift` (which `RegisterHotKey` can't reliably deliver).
-- **Two STT backends, picked at dictation time**:
-  - **Whisper** (GPU path, and an optional CPU path) via [CTranslate2](https://github.com/OpenNMT/CTranslate2) + [ct2rs](https://codeberg.org/tazz4843/ct2rs) — the same engine that powers `faster-whisper`. Used unconditionally on CUDA. We drive the lower-level `sys::Whisper` API so we own prompt construction (needed for the custom-vocabulary feature).
-  - **Moonshine base-en** (default CPU path) via [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) — RTFx 25–40× on AVX2 CPUs at ~6.65 % WER, beating Whisper small.en's ~3–5× RTFx at the same accuracy tier. Loaded once and reused.
-- **Per-device model + compute_type pairs**:
-  - GPU (CUDA, Whisper): default `Systran/faster-whisper-medium.en`, `INT8_FLOAT16`
-  - CPU (Moonshine, default): k2-fsa's prebuilt v1 base-en, INT8
-  - CPU (Whisper, opt-in): default `Systran/faster-whisper-base.en`, `INT8`
-  - All user-overridable in settings; the active backend is named in the tray + settings UI.
-- **Energy-based VAD** — trims leading + trailing silence before encoding. Cuts encoder time on partial-30 s clips and prevents Whisper's silence-tail hallucination loop. Applied to both backends.
-- **Custom dictionary (Whisper only)** — a free-form initial prompt + a vocabulary list get tokenized and prepended to Whisper's decoder prompt with a `<|startofprev|>` marker, biasing the model toward project-specific jargon.
-- **Hallucination filter (Whisper only)** — drops known training-residue patterns (`[BLANK_AUDIO]`, `Thanks for watching`, etc.) so they never paste into your editor. Moonshine doesn't have these training-residue issues, so its output is forwarded as-is.
-- **Cross-platform CUDA detection** via `cuda-dynamic-loading` — same binary works with or without an NVIDIA card; falls back to the CPU path (Moonshine by default) silently.
+1. Grab `VibeToText_<version>_x64-setup.exe` (NSIS installer, smaller)
+   or `VibeToText_<version>_x64_en-US.msi` (MSI for managed installs)
+   from the [latest release](https://github.com/OBress/VibeToText/releases/latest).
+2. Run the installer. It installs to `%LOCALAPPDATA%\Programs\VibeToText\`
+   (current-user, no admin prompt).
+3. Launch **VibeToText** from the Start menu. The settings window
+   opens; minimize it — the app lives in the system tray.
+4. **Press your push-to-talk hotkey (default `Ctrl+Alt+D`), speak,
+   release.** The transcript pastes at your cursor.
 
-## Distribution
+### macOS
 
-End users get **one self-contained .exe** (or `.app` on macOS, `.AppImage` on Linux). CTranslate2's static library AND sherpa-onnx's ONNX runtime statics are linked into the binary at build time — no separate DLLs to ship. Model weights download on first dictation:
+1. Grab `VibeToText_<version>_aarch64.dmg` (Apple silicon) or
+   `VibeToText_<version>_x64.dmg` (Intel) from the [latest release](https://github.com/OBress/VibeToText/releases/latest).
+2. Mount the DMG and drag **VibeToText.app** to `/Applications`.
+3. **First launch:** right-click the app → **Open** → confirm in the
+   dialog. macOS Gatekeeper blocks unsigned apps on double-click; the
+   right-click path adds it to your allowlist. (We don't yet sign +
+   notarize — see [#issue](https://github.com/OBress/VibeToText/issues)
+   if this is a blocker for you.)
+4. Grant **Microphone** and **Accessibility** permissions when macOS
+   prompts (System Settings → Privacy & Security). The Accessibility
+   permission is what lets VibeToText paste at your cursor.
+5. **Press the hotkey, speak, release.**
 
-- Whisper: ~150–770 MB from HuggingFace, cached under `~/.cache/huggingface/hub/`.
-- Moonshine base-en (INT8): ~250 MB from k2-fsa's GitHub releases, extracted into `<app_data_dir>/models/moonshine-base-en-int8/`.
+### Linux
 
-## Build prerequisites
-
-Building from source requires:
-
-- **Rust** (1.75+)
-- **CMake** (≥3.28; ct2rs builds CTranslate2 from C++ source)
-- **MSVC C++ toolchain** on Windows (Visual Studio 2022 with C++ workload)
-- **Node.js** + npm (Tauri's frontend tooling)
-- **CUDA Toolkit** (only required if you want GPU support; the binary works without it)
-
-First clean build takes ~20–30 minutes — the C++ compile of CTranslate2 dominates; sherpa-onnx adds ~30 s by downloading its prebuilt static libs from k2-fsa's release artifacts. Subsequent incremental builds are ~30 s.
+Pick whichever package fits your distro:
 
 ```bash
-npm install
-npm run dev      # debug build with hot reload
-npm run build    # release build with installer
+# Debian / Ubuntu / Mint / PopOS / etc.
+sudo dpkg -i vibe-to-text_<version>_amd64.deb
+# Resolves any missing system deps:
+sudo apt -f install
+
+# Distro-agnostic single-file binary
+chmod +x vibe-to-text_<version>_amd64.AppImage
+./vibe-to-text_<version>_amd64.AppImage
 ```
 
-End users do NOT need any of these — they just run the installed `.exe`.
+Then launch **VibeToText** from your app launcher and press the hotkey.
 
-## Default hotkeys
+You may need `libwebkit2gtk-4.1-0` and `libgtk-3-0` installed
+(present on most desktops out of the box; the `.deb` declares them
+as dependencies).
+
+---
+
+## First-run experience
+
+| Step | What happens |
+| --- | --- |
+| First launch | Settings window opens. Configure your hotkeys, choose Auto / CPU-only mode. |
+| First dictation press | If you're on CPU mode, the ~250 MB Moonshine model downloads (one-time, cached afterwards). On GPU mode, the ~770 MB Whisper medium.en model downloads from HuggingFace. |
+| Subsequent presses | Hotkey-to-paste latency is **300–500 ms on GPU**, **0.7–1.5 s on CPU** (Moonshine). Both well under most users' thinking pauses. |
+
+Models live under:
+
+- **Whisper**: `~/.cache/huggingface/hub/`
+- **Moonshine**: `<app_data_dir>/models/moonshine-base-en-int8/`
+  - Windows: `%APPDATA%\dev.vibetotext.app\models\`
+  - macOS: `~/Library/Application Support/dev.vibetotext.app/models/`
+  - Linux: `~/.local/share/dev.vibetotext.app/models/`
+
+You can pre-download from the **Settings → Model files → Download
+model** button if you'd rather not wait on the first dictation.
+
+---
+
+## Hotkeys
 
 | Action | Default |
-|---|---|
-| Show/hide settings | `Ctrl+Alt+V` |
+| --- | --- |
+| Show / hide settings | `Ctrl+Alt+V` |
 | Push-to-talk dictation (hold) | `Ctrl+Alt+D` |
+| Toggle STT on / off | (unset; configurable) |
 
-Configure both in settings. Modifier-only combos like `Ctrl+Shift` work on Windows via a separate Raw Input hook.
+All three are configurable in Settings. Modifier-only combos like
+`Ctrl+Shift` are supported on Windows via a Raw Input hook (the
+standard `RegisterHotKey` API can't reliably deliver modifier-only
+events).
 
-## Layout
+---
 
-- `src-tauri/` — Rust backend
-  - `src/lib.rs` — Tauri app entry, hotkey routing, IPC commands
-  - `src/stt/whisper.rs` — CT2 inference path with VAD + initial_prompt
-  - `src/models.rs` — HuggingFace model download + cache management
-  - `src/vad.rs` — energy-based silence trimmer
-  - `src/audio.rs` — `cpal` capture, resampling to 16 kHz mono f32
-  - `src/inject.rs` — clipboard-paste injection at cursor
-  - `src/modifier_hook.rs` — Windows Raw Input for modifier-only hotkeys
-  - `src/analytics.rs` — per-utterance stats persisted to `analytics.json`
-  - `.cargo/config.toml` — Windows build workarounds (`+crt-static`, CUDA path forward-slash fix)
-- `src/` — frontend (vanilla HTML/JS/CSS, no framework)
-  - `index.html` — settings + analytics dashboard
-  - `overlay.html` — listening overlay (transparent always-on-top window with live waveform)
-  - `main.js`, `overlay.js`, `styles.css`, `overlay.css`
-- `package.json`, `Cargo.toml` — dependency manifests
+## What's under the hood
+
+Two STT backends, picked at dictation time based on your "Compute
+device" setting and runtime CUDA detection:
+
+- **Whisper** via [CTranslate2](https://github.com/OpenNMT/CTranslate2)
+  + [ct2rs](https://codeberg.org/tazz4843/ct2rs) — the same engine
+  that powers `faster-whisper`. Default on GPU. Custom-vocabulary
+  bias via Whisper's `initial_prompt`. Hallucination filter for
+  training-set residue (`[BLANK_AUDIO]`, "Thanks for watching", etc.).
+- **Moonshine base-en (INT8)** via [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)
+  — RTFx 25–40× on AVX2 CPUs at ~6.65 % WER. Default on CPU. Faster
+  than Whisper small.en on the same hardware at comparable accuracy.
+
+Energy-based VAD trims leading + trailing silence before encoding.
+Cross-platform CUDA detection via dynamic loading — same binary
+works with or without an NVIDIA card.
+
+Output goes through a **clipboard-restore paste**: stash existing
+clipboard → write transcript → send Ctrl+V → restore previous
+clipboard contents. Fast on long transcripts, doesn't lose your
+copied text.
+
+For the full architectural detail see [BUILDING.md](BUILDING.md).
+
+---
+
+## Privacy
+
+Everything runs locally:
+
+- Audio is captured by [cpal](https://github.com/RustAudio/cpal),
+  resampled to 16 kHz mono, fed to the model in-process. It's never
+  written to disk; never sent over the network.
+- Models download once from HuggingFace (Whisper) or the sherpa-onnx
+  GitHub releases page (Moonshine). After that, no further network
+  traffic happens during dictation.
+- The only data persisted is `analytics.json` (per-utterance counts +
+  short transcript previews, used by the dashboard widgets). Reset
+  any time from Dashboard → "Reset analytics".
+
+---
+
+## Building from source
+
+If you want to modify VibeToText or build a custom binary, see
+[BUILDING.md](BUILDING.md). End users don't need any of this — the
+installer is self-contained.
+
+---
 
 ## License
 
-MIT — do whatever.
+[MIT](LICENSE) — do whatever.

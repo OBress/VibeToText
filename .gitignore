@@ -16,6 +16,15 @@ src-tauri/gen/
 src-tauri/.tauri/
 src-tauri/WixTools/
 
+# --- Bundle staging ---
+# scripts/stage-bundle-resources.cjs copies sherpa-onnx + onnxruntime
+# DLLs into this dir before `tauri build` on Windows. Each DLL is
+# 50-100 MB, downloaded fresh per-build by sherpa-onnx-sys's build
+# script — never commit. We keep a .gitkeep so the dir exists and
+# Tauri's resources glob doesn't trip on missing-dir.
+src-tauri/bundle-resources/*
+!src-tauri/bundle-resources/.gitkeep
+
 # --- Per-developer Cargo overrides ---
 # .cargo/config.toml lives in src-tauri/ and pins workarounds
 # (CUDA path, +crt-static) that NEED to be in version control —
