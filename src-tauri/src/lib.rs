@@ -124,9 +124,22 @@ async fn save_config(
             );
             *w = None;
         }
+        drop(w);
         // Also clear the surfaced backend name so the UI doesn't
         // keep showing a stale "current backend" until next dictation.
         *state.current_backend.lock().await = None;
+
+        // Kick a background warm-up of the NEW backend so the next
+        // dictation press doesn't pay the 1-3 s model-load cost.
+        // Without this, switching from "GPU" to "CPU only" silently
+        // leaves the cache empty until the user actually triggers
+        // dictation, at which point they wait through a model load
+        // they didn't expect.
+        let app_for_warm = app.clone();
+        let cfg_for_warm = new_config.clone();
+        tauri::async_runtime::spawn(async move {
+            stt::warm_whisper(app_for_warm, cfg_for_warm).await;
+        });
     }
 
     // Re-register hotkeys if any changed.

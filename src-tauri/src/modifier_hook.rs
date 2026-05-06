@@ -356,8 +356,17 @@ fn recompute_state() {
     let now_matching = (held == want) && other == 0;
     let prefix_collision = (held & want) == want && other > 0;
     let was = WAS_MATCHING.load(Ordering::Relaxed);
+    let inv = INVALIDATED.load(Ordering::Relaxed);
+    log::trace!(
+        "modifier_hook: recompute want={want:#x} held={held:#x} other={other} now_matching={now_matching} prefix_collision={prefix_collision} was={was} invalidated={inv}"
+    );
 
     if prefix_collision {
+        if !inv {
+            log::debug!(
+                "modifier_hook: prefix collision (held={held:#x} other={other}), invalidating"
+            );
+        }
         INVALIDATED.store(true, Ordering::Relaxed);
         WAS_MATCHING.store(false, Ordering::Relaxed);
         START_GEN.fetch_add(1, Ordering::Relaxed);
@@ -370,23 +379,31 @@ fn recompute_state() {
     if now_matching && !was {
         WAS_MATCHING.store(true, Ordering::Relaxed);
         if INVALIDATED.load(Ordering::Relaxed) {
+            log::debug!("modifier_hook: matching but INVALIDATED — skipping press");
             return;
         }
+        log::debug!("modifier_hook: combo matched, scheduling press after debounce");
         let my_gen = START_GEN.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
         std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_millis(START_DEBOUNCE_MS));
             if START_GEN.load(Ordering::Relaxed) != my_gen {
+                log::debug!("modifier_hook: debounce: gen changed, dropping press");
                 return;
             }
             if INVALIDATED.load(Ordering::Relaxed) {
+                log::debug!("modifier_hook: debounce: invalidated mid-debounce, dropping press");
                 return;
             }
             let still_held = detail_to_mask(HELD_DETAIL.load(Ordering::Relaxed));
             let still_other = OTHER_KEYS_HELD.load(Ordering::Relaxed);
             if still_held != WATCH_MASK.load(Ordering::Relaxed) || still_other != 0 {
+                log::debug!(
+                    "modifier_hook: debounce: state changed (held={still_held:#x} other={still_other}), dropping press"
+                );
                 return;
             }
             if !STARTED.swap(true, Ordering::Relaxed) {
+                log::debug!("modifier_hook: debounce: firing press");
                 send(true);
             }
         });
@@ -394,6 +411,7 @@ fn recompute_state() {
         WAS_MATCHING.store(false, Ordering::Relaxed);
         START_GEN.fetch_add(1, Ordering::Relaxed);
         if STARTED.swap(false, Ordering::Relaxed) {
+            log::debug!("modifier_hook: combo released, firing release");
             send(false);
         }
     }

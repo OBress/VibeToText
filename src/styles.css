@@ -570,12 +570,12 @@ body.show-pop { animation: window-in 0.32s cubic-bezier(.2,.8,.2,1); }
    sections feel distinct without needing a noisy divider. The old
    `#view-settings section { margin-bottom: 22px }` rule still fires
    here as a fallback for any sections without `.setting-card`. */
-#view-settings section { margin-bottom: 14px; }
+#view-settings section { margin-bottom: 10px; }
 .setting-card {
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 10px;
-  padding: 14px 16px;
+  padding: 10px 14px;
 }
 .setting-card.narrow {
   max-width: 560px;
@@ -586,9 +586,17 @@ body.show-pop { animation: window-in 0.32s cubic-bezier(.2,.8,.2,1); }
   text-transform: uppercase;
   letter-spacing: 1.4px;
   color: var(--muted);
-  margin: 0 0 10px;
+  margin: 0 0 8px;
   font-weight: 500;
 }
+/* `.compact` mode collapses internal label spacing to fit the whole
+   page without scrolling on a 800px-tall window. */
+#view-settings.compact .setting-card { padding: 9px 12px; }
+#view-settings.compact .setting-card h2 { margin: 0 0 6px; }
+#view-settings.compact .setting-card label { margin-bottom: 6px; }
+#view-settings.compact .setting-card label:last-child { margin-bottom: 0; }
+#view-settings.compact .setting-card p { margin: 4px 0; }
+#view-settings.compact textarea { min-height: 38px; }
 
 /* Two-column grid for paired settings cards. Collapses to a single
    column on narrow windows so the dashboard window's minWidth (720)
@@ -596,8 +604,8 @@ body.show-pop { animation: window-in 0.32s cubic-bezier(.2,.8,.2,1); }
 .settings-grid-2 {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 14px;
-  margin-bottom: 14px;
+  gap: 10px;
+  margin-bottom: 10px;
 }
 @media (max-width: 760px) {
   .settings-grid-2 { grid-template-columns: 1fr; }

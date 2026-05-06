@@ -37,34 +37,41 @@ function fitCanvas() {
   }
 }
 
-// Map RMS → [0..1] with an aggressive contrast curve so speech looks
-// dramatically taller than ambient room tone.
-//   1. dB-scale around a -50dB noise floor → 0..1
-//   2. Two-zone shape: noise gate hard-clamps silence near zero, and
-//      above the gate we use a sqrt-style curve so even modest speech
-//      reaches high amplitudes (visually punchy peaks).
+// Map RMS → [0..1] with a contrast curve that's sensitive to normal
+// speaking volume on consumer mics (quiet laptop arrays, headset mics
+// with low gain), while still keeping ambient room tone visibly flat.
+//
+//   1. dB-scale across a wide -65 dBFS to 0 dBFS window → 0..1.
+//      Old version cut at -50, which on a quiet mic put normal
+//      conversational speech (often -45 to -55 dB peaks) below the
+//      gate so the waveform never moved.
+//   2. Two-zone shape: a SOFT noise gate keeps the floor visually
+//      flat without dropping speech that happens to sit just above
+//      the noise. Above the gate, sqrt curve so even a half-volume
+//      "hello" pushes near full height.
 //   3. Allow occasional peaks above 1.0; the draw loop clips them.
 function rmsToNorm(rms) {
   const safe = Math.max(rms, 1e-5);
   const db = 20 * Math.log10(safe);
-  const min = -50;
+  const min = -65;
   const max = 0;
   let v = (db - min) / (max - min);
   v = Math.max(0, Math.min(1.0, v));
 
-  // Hard noise gate — silence is FLAT, not a low hum. The contrast
-  // between flat-line silence and speech-time peaks is what makes the
-  // waveform feel alive instead of always wiggling.
-  const gate = 0.22;
+  // Soft noise gate at v≈0.12 (≈ -57 dBFS). Below this the curve
+  // squashes toward zero; above this it expands. The previous gate
+  // at 0.22 (≈ -39 dBFS) was way too high — on a quiet mic, normal
+  // speech often sits below -39 and never crossed the gate.
+  const gate = 0.12;
   if (v <= gate) {
-    // Square the input below the gate so even soft room tone settles
-    // to ~0.005, basically invisible.
-    v = Math.pow(v / gate, 2) * 0.03;
+    // Cube-soft squash below the gate so true silence settles
+    // toward zero but breath/keyboard taps still wiggle a bit.
+    v = Math.pow(v / gate, 2) * 0.05;
   } else {
-    // Above the gate: sqrt curve so even a half-volume "hello" pushes
-    // close to 0.7-0.8. Loud speech easily hits 1.0.
+    // Above the gate: sqrt curve so even soft speech reaches
+    // 0.6–0.8, loud speech saturates near 1.0.
     const t = (v - gate) / (1 - gate);
-    v = 0.03 + 0.97 * Math.pow(t, 0.5);
+    v = 0.05 + 0.95 * Math.pow(t, 0.45);
   }
   return v;
 }

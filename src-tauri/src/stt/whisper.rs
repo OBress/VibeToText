@@ -500,11 +500,18 @@ fn transcribe_one(
     )?;
 
     // === Decoder options ===
+    // max_length=448 matches Whisper's default decoder context so a
+    // long dictation (~30 s / ~300 words) doesn't get cut off
+    // mid-sentence. We previously had this at 224 to bound the worst
+    // case during hallucination loops, but the real fix for those is
+    // repetition_penalty=1.2 + no_repeat_ngram_size=3 (both still set
+    // here), not the artificial output cap. With the cap at 224 the
+    // user noticed truncation on long speech.
     let opts = WhisperOptions {
         beam_size: 1,
         repetition_penalty: 1.2,
         no_repeat_ngram_size: 3,
-        max_length: 224,
+        max_length: 448,
         ..WhisperOptions::default()
     };
 

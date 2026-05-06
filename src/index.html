@@ -124,7 +124,7 @@
     </main>
 
     <!-- =========================== SETTINGS =========================== -->
-    <main id="view-settings" class="view hidden">
+    <main id="view-settings" class="view hidden compact">
       <!-- Master toggle: single inline row, no separate big section. -->
       <section class="setting-card">
         <div class="row-inline">
@@ -158,10 +158,10 @@
             <button type="button" class="warn-close" aria-label="Dismiss warning">×</button>
           </p>
           <label>
-            <span>Toggle STT on/off <span class="muted small">(optional)</span></span>
+            <span>Toggle STT <span class="muted small">(optional)</span></span>
             <input id="stt_toggle_hotkey" class="hotkey-input" placeholder="leave blank to disable" readonly />
           </label>
-          <p class="hint small">Click a field, press keys. <code>Esc</code> cancels · <code>Backspace</code> resets to default.</p>
+          <p class="hint small"><code>Esc</code> cancels · <code>Backspace</code> resets.</p>
         </section>
 
         <section class="setting-card">
@@ -182,7 +182,8 @@
         </section>
       </div>
 
-      <!-- Compute device + Model side-by-side. -->
+      <!-- Compute + Model side-by-side, with Model Files inlined into the
+           model card so we save a row. -->
       <div class="settings-grid-2">
         <section class="setting-card">
           <h2>Compute device</h2>
@@ -191,39 +192,37 @@
               <input type="radio" name="backend_mode" value="auto" />
               <div>
                 <strong>Auto</strong>
-                <small>GPU if visible, else CPU</small>
-              </div>
-            </label>
-            <label class="radio">
-              <input type="radio" name="backend_mode" value="gpu" />
-              <div>
-                <strong>GPU only</strong>
-                <small>Force CUDA — error if no GPU</small>
+                <small>GPU when present, else CPU</small>
               </div>
             </label>
             <label class="radio">
               <input type="radio" name="backend_mode" value="cpu" />
               <div>
                 <strong>CPU only</strong>
-                <small>Skip GPU even if present</small>
+                <small>Force CPU even with a GPU</small>
               </div>
             </label>
+          </div>
+          <div class="row-inline" style="margin-top:10px;">
+            <p class="hint small inline" id="whisper_status">Model: checking…</p>
+            <button id="download_whisper" class="secondary small">Download</button>
+          </div>
+          <div id="whisper_progress_wrap" style="display:none; margin-top:8px;">
+            <div class="progress"><div class="progress-bar" id="whisper_progress_bar"></div></div>
+            <p class="hint small" id="whisper_progress_label">starting…</p>
           </div>
         </section>
 
         <section class="setting-card">
           <h2>Transcription model</h2>
-          <p class="hint small" id="model_picker_hint">
-            Different sizes trade WER vs latency. Assets download on first use into a local cache; switching back is instant.
-          </p>
           <!-- CPU engine: Moonshine (default) or Whisper.
                Visible when backend_mode is "auto" or "cpu". GPU mode
                always uses Whisper, so we hide this selector. -->
           <label id="cpu_engine_wrap">
             <span>CPU engine <span class="muted small">— English-only</span></span>
             <select id="cpu_engine">
-              <option value="moonshine">Moonshine base-en (INT8) — 250 MB · 6.6% WER · 25–40× CPU · default</option>
-              <option value="whisper">Whisper (CTranslate2) — fall back to a Whisper model below</option>
+              <option value="moonshine">Moonshine base-en — 250 MB · 6.6% WER · default</option>
+              <option value="whisper">Whisper (CTranslate2) — uses CPU model below</option>
             </select>
           </label>
           <!-- GPU dropdown: visible when backend_mode is "auto" or "gpu". -->
@@ -254,36 +253,20 @@
         </section>
       </div>
 
-      <!-- Model files: compact card. -->
-      <section class="setting-card narrow">
-        <h2>Model files</h2>
-        <div class="row-inline">
-          <p class="hint small inline" id="whisper_status">Status: checking…</p>
-          <button id="download_whisper" class="secondary small">Download model</button>
+      <!-- Custom vocabulary: feeds into Whisper's `initial_prompt`. Whisper-
+           only — Moonshine ignores it. Single tight card. -->
+      <section class="setting-card">
+        <h2>Custom vocabulary <span class="muted small">— Whisper only</span></h2>
+        <div class="settings-grid-2">
+          <label>
+            <span>Initial prompt <span class="muted small">— full sentences</span></span>
+            <textarea id="whisper_initial_prompt" rows="2" placeholder="e.g. The speaker is dictating Rust code about Tauri, CTranslate2, and Whisper."></textarea>
+          </label>
+          <label>
+            <span>Custom words <span class="muted small">— one per line</span></span>
+            <textarea id="custom_dictionary" rows="2" placeholder="Tauri&#10;ct2rs"></textarea>
+          </label>
         </div>
-        <div id="whisper_progress_wrap" style="display:none; margin-top:10px;">
-          <div class="progress"><div class="progress-bar" id="whisper_progress_bar"></div></div>
-          <p class="hint small" id="whisper_progress_label">starting…</p>
-        </div>
-      </section>
-
-      <!-- Custom vocabulary: feeds into Whisper's `initial_prompt`
-           to bias the decoder toward project-specific jargon. -->
-      <section class="setting-card narrow">
-        <h2>Custom vocabulary</h2>
-        <p class="hint small">
-          Bias transcription toward project-specific jargon, framework names, or proper nouns.
-          The text + word list are fed to Whisper as an <code>initial_prompt</code> (max ~200 tokens).
-          Recent context biases more strongly than earlier — keep prompts focused.
-        </p>
-        <label>
-          <span>Initial prompt <span class="muted small">— full sentences work best</span></span>
-          <textarea id="whisper_initial_prompt" rows="2" placeholder="e.g. The speaker is dictating Rust code about Tauri, CTranslate2, and Whisper."></textarea>
-        </label>
-        <label>
-          <span>Custom words <span class="muted small">— one per line</span></span>
-          <textarea id="custom_dictionary" rows="4" placeholder="Tauri&#10;ct2rs&#10;CTranslate2&#10;cuBLAS&#10;TensorCore"></textarea>
-        </label>
       </section>
 
       <!-- Auto-save: any change persists immediately. The header status
