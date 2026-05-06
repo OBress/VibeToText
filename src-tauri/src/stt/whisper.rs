@@ -458,6 +458,39 @@ fn transcribe_one(
     // log-mel-spectrogram, normalize, and pack into an Array2 of
     // shape (feature_size, nb_max_frames). Pad with zeros if the
     // chunk is shorter than `n_samples`.
+    //
+    // BEFORE chunking, we append ~600 ms of trailing silence to the
+    // raw samples for two distinct reasons that BOTH bite Whisper
+    // (Moonshine's sliding-window encoder doesn't have either, which
+    // is why Moonshine never drops the user's last word):
+    //
+    //   1. The STFT only emits an FFT frame when its rolling window
+    //      fills (n_fft samples = 25 ms). Without padding, samples in
+    //      the final partial window get stuck in STFT's internal
+    //      buffer and never produce a mel column. ~10-25 ms loss
+    //      per utterance.
+    //
+    //   2. More importantly: Whisper's decoder is trained on
+    //      30 s mel windows where a CLEAR run of trailing silence
+    //      signals "speech ended, emit EOT." With no trailing
+    //      silence, the decoder sees the user's last word right at
+    //      the end of the meaningful mel frames and the rest as
+    //      zero-padding (silence). The transition is so abrupt that
+    //      the decoder can fire EOT BEFORE finishing the last word,
+    //      truncating it. Padding with real silence smooths the
+    //      transition and matches the training distribution.
+    //
+    // 600 ms is well over both Whisper's 25 ms STFT window AND
+    // typical word-final phoneme tails (~150-300 ms), without
+    // pushing single-chunk utterances over the 30 s boundary unless
+    // the user was already near-cap.
+    const TRAILING_PAD_MS: usize = 600;
+    let pad_samples = (cfg.sampling_rate as usize) * TRAILING_PAD_MS / 1000;
+    let mut padded: Vec<f32> = Vec::with_capacity(samples.len() + pad_samples);
+    padded.extend_from_slice(samples);
+    padded.extend(std::iter::repeat(0.0_f32).take(pad_samples));
+    let samples: &[f32] = &padded;
+
     let mut stft = Spectrogram::new(cfg.n_fft, cfg.hop_length);
     let mut mel_per_chunk: Vec<Array2<f32>> = Vec::new();
 
