@@ -44,6 +44,12 @@ async function loadConfig() {
   for (const r of document.querySelectorAll('input[name="backend_mode"]')) {
     r.checked = r.value === mode;
   }
+  // CPU engine (moonshine / whisper). Defaults to moonshine because
+  // it's much faster on CPU at comparable WER. GPU mode always uses
+  // Whisper regardless of this setting.
+  const cpuEngine = (cfg.cpuEngine || "moonshine").toLowerCase();
+  const cpuEngineEl = document.getElementById("cpu_engine");
+  if (cpuEngineEl) cpuEngineEl.value = cpuEngine;
   // Per-device Whisper model dropdowns. Defaults match the Rust
   // side: base.en for CPU (speed), small.en for GPU (quality).
   const modelCpu = cfg.whisperModelCpu || "Systran/faster-whisper-base.en";
@@ -52,39 +58,45 @@ async function loadConfig() {
   const gpuSelect = document.getElementById("whisper_model_gpu");
   if (cpuSelect) cpuSelect.value = modelCpu;
   if (gpuSelect) gpuSelect.value = modelGpu;
-  // Wire dropdown visibility to the backend_mode radios.
-  applyModelPickerVisibility(mode);
-  // Custom-vocab fields (NO-OP backend for now, but UI persists).
+  // Wire dropdown visibility to the backend_mode + cpu_engine combo.
+  applyModelPickerVisibility(mode, cpuEngine);
+  // Custom-vocab fields (Whisper-only — Moonshine ignores them).
   const promptEl = document.getElementById("whisper_initial_prompt");
   if (promptEl) promptEl.value = cfg.whisperInitialPrompt || "";
   const dictEl = document.getElementById("custom_dictionary");
   if (dictEl) dictEl.value = (cfg.customDictionary || []).join("\n");
-}
-
-/// Show only the dropdowns that matter for the current backend_mode.
-///   - "auto": both CPU and GPU pickers (auto can pick either at runtime)
-///   - "gpu":  just the GPU picker
-///   - "cpu":  just the CPU picker
-function applyModelPickerVisibility(mode) {
-  const gpuWrap = document.getElementById("model_picker_gpu_wrap");
-  const cpuWrap = document.getElementById("model_picker_cpu_wrap");
-  if (!gpuWrap || !cpuWrap) return;
-  const showGpu = mode !== "cpu";
-  const showCpu = mode !== "gpu";
-  gpuWrap.style.display = showGpu ? "" : "none";
-  cpuWrap.style.display = showCpu ? "" : "none";
-  // Autostart: read OS-level state as the source of truth (the user might
-  // have disabled it from Task Manager → Startup since we last saved).
+  // Autostart: read OS-level state as the source of truth (the user
+  // might have disabled it from Task Manager → Startup since we last
+  // saved). Falls back to the saved cfg flag if the IPC errors.
   const autoStartEl = document.getElementById("auto_start");
   if (autoStartEl) {
     try {
       autoStartEl.checked = await invoke("is_auto_start_enabled");
-    } catch (e) {
+    } catch (_e) {
       autoStartEl.checked = !!cfg.autoStart;
     }
   }
-  // Surface any pre-existing collision (e.g. config edited by hand).
+  // Surface any pre-existing hotkey collision (e.g. config edited by
+  // hand).
   if (typeof updateCollisionWarning === "function") updateCollisionWarning();
+}
+
+/// Show only the dropdowns that matter for the current backend_mode +
+/// cpu_engine combo.
+///   - GPU dropdown:    visible if mode != "cpu" (auto / gpu)
+///   - CPU dropdown:    visible if mode != "gpu" AND cpu_engine == "whisper"
+///   - cpu_engine:      visible if mode != "gpu" (auto / cpu)
+function applyModelPickerVisibility(mode, cpuEngine) {
+  const gpuWrap = document.getElementById("model_picker_gpu_wrap");
+  const cpuWrap = document.getElementById("model_picker_cpu_wrap");
+  const engineWrap = document.getElementById("cpu_engine_wrap");
+  const showGpu = mode !== "cpu";
+  const showEngine = mode !== "gpu";
+  const showCpuModel =
+    mode !== "gpu" && (cpuEngine || "moonshine").toLowerCase() === "whisper";
+  if (gpuWrap) gpuWrap.style.display = showGpu ? "" : "none";
+  if (cpuWrap) cpuWrap.style.display = showCpuModel ? "" : "none";
+  if (engineWrap) engineWrap.style.display = showEngine ? "" : "none";
 }
 
 function toCamel(s) {
@@ -172,6 +184,9 @@ async function runSaveOnce() {
     whisperModelGpu:
       document.getElementById("whisper_model_gpu")?.value
         || "Systran/faster-whisper-small.en",
+    cpuEngine:
+      document.getElementById("cpu_engine")?.value
+        || "moonshine",
     whisperInitialPrompt:
       document.getElementById("whisper_initial_prompt")?.value || "",
     customDictionary,
@@ -220,15 +235,27 @@ function flashError(e) {
 
 function wireAutoSave() {
   // Backend-mode radios — save AND toggle which model dropdown(s)
-  // are visible in the UI based on the new mode.
+  // are visible in the UI based on the new mode + current cpu_engine.
   document
     .querySelectorAll('input[name="backend_mode"]')
     .forEach((el) =>
       el.addEventListener("change", () => {
-        applyModelPickerVisibility(el.value);
+        const engine = document.getElementById("cpu_engine")?.value || "moonshine";
+        applyModelPickerVisibility(el.value, engine);
         scheduleSave({ immediate: true });
       })
     );
+  // CPU engine select — flips between Moonshine (no model picker) and
+  // Whisper (model picker visible). Triggers save immediately.
+  const engineEl = document.getElementById("cpu_engine");
+  if (engineEl) {
+    engineEl.addEventListener("change", () => {
+      const mode =
+        document.querySelector('input[name="backend_mode"]:checked')?.value || "auto";
+      applyModelPickerVisibility(mode, engineEl.value);
+      scheduleSave({ immediate: true });
+    });
+  }
   // Model dropdowns — save the moment the user picks a new model
   // for either device.
   ["whisper_model_cpu", "whisper_model_gpu"].forEach((id) => {

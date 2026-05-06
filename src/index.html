@@ -207,13 +207,23 @@
         </section>
 
         <section class="setting-card">
-          <h2>Whisper model</h2>
+          <h2>Transcription model</h2>
           <p class="hint small" id="model_picker_hint">
-            Different sizes trade WER vs latency. Each model downloads on first use into its own cache; switching back is instant.
+            Different sizes trade WER vs latency. Assets download on first use into a local cache; switching back is instant.
           </p>
+          <!-- CPU engine: Moonshine (default) or Whisper.
+               Visible when backend_mode is "auto" or "cpu". GPU mode
+               always uses Whisper, so we hide this selector. -->
+          <label id="cpu_engine_wrap">
+            <span>CPU engine <span class="muted small">— English-only</span></span>
+            <select id="cpu_engine">
+              <option value="moonshine">Moonshine v2 medium — 245 MB · 6.6% WER · 25–40× CPU · default</option>
+              <option value="whisper">Whisper (CTranslate2) — fall back to a Whisper model below</option>
+            </select>
+          </label>
           <!-- GPU dropdown: visible when backend_mode is "auto" or "gpu". -->
           <label id="model_picker_gpu_wrap">
-            <span>Model on GPU</span>
+            <span>Whisper model on GPU</span>
             <select id="whisper_model_gpu">
               <option value="Systran/faster-whisper-tiny.en">tiny.en — 40 MB · 14% WER</option>
               <option value="Systran/faster-whisper-base.en">base.en — 150 MB · 10% WER</option>
@@ -223,9 +233,11 @@
               <option value="Systran/faster-whisper-large-v3">large-v3 — 1.5 GB · 4.5% WER · best quality</option>
             </select>
           </label>
-          <!-- CPU dropdown: visible when backend_mode is "auto" or "cpu". -->
+          <!-- CPU Whisper dropdown: visible only when backend_mode allows
+               CPU AND cpu_engine is "whisper". Hidden when Moonshine is
+               selected since Moonshine has only one variant. -->
           <label id="model_picker_cpu_wrap">
-            <span>Model on CPU</span>
+            <span>Whisper model on CPU</span>
             <select id="whisper_model_cpu">
               <option value="Systran/faster-whisper-tiny.en">tiny.en — 40 MB · 14% WER · fastest</option>
               <option value="Systran/faster-whisper-base.en">base.en — 150 MB · 10% WER · default</option>

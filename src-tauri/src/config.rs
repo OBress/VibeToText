@@ -26,7 +26,7 @@ pub struct AppConfig {
     #[serde(default)]
     pub whisper_model_dir: Option<String>,
 
-    /// CTranslate2 device selection. One of:
+    /// Compute device selection. One of:
     ///   - "auto" (default): use CUDA if a device is visible,
     ///     otherwise CPU.
     ///   - "gpu": force CUDA. Errors out if no device is found,
@@ -36,6 +36,19 @@ pub struct AppConfig {
     ///     laptops.
     #[serde(default = "default_backend_mode")]
     pub backend_mode: String,
+
+    /// Engine to use when the resolved device is CPU. One of:
+    ///   - "moonshine" (default): Moonshine v2 medium via
+    ///     sherpa-onnx. ~6.65% WER, RTFx 25-40× on AVX2 CPUs.
+    ///     The Better CPU choice for an English-only dictation
+    ///     workflow.
+    ///   - "whisper": faster-whisper-* via ct2rs. Slower on CPU
+    ///     (~3-5× RTFx for small.en) but offers wider model
+    ///     selection + multilingual.
+    /// GPU mode always uses Whisper regardless of this setting —
+    /// Moonshine doesn't have a CUDA path.
+    #[serde(default = "default_cpu_engine")]
+    pub cpu_engine: String,
 
     /// Legacy single-model field. Kept on the struct for forward
     /// compatibility with old config.json files; new code reads
@@ -100,6 +113,10 @@ fn default_backend_mode() -> String {
     "auto".into()
 }
 
+fn default_cpu_engine() -> String {
+    "moonshine".into()
+}
+
 fn default_whisper_model_cpu() -> String {
     // base.en: 150 MB, ~10% WER, the comparison Python project's
     // default. Sweet spot for CPU dictation latency.
@@ -126,6 +143,7 @@ impl Default for AppConfig {
             first_run: true,
             whisper_model_dir: None,
             backend_mode: default_backend_mode(),
+            cpu_engine: default_cpu_engine(),
             whisper_model_id: default_whisper_model_cpu(),
             whisper_model_cpu: default_whisper_model_cpu(),
             whisper_model_gpu: default_whisper_model_gpu(),

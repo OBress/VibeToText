@@ -15,19 +15,25 @@ The app is designed around **push-to-talk** — you hold the hotkey while speaki
 
 - **Tauri 2** desktop shell — Rust backend, WebView2/WebKit frontend, persistent settings + analytics windows.
 - **Hotkey capture** — `tauri-plugin-global-shortcut` for normal combos, plus a Windows Raw Input listener for modifier-only hotkeys like `Ctrl+Shift` (which `RegisterHotKey` can't reliably deliver).
-- **Speech-to-text via [CTranslate2](https://github.com/OpenNMT/CTranslate2) + [ct2rs](https://codeberg.org/tazz4843/ct2rs)** — the same engine that powers `faster-whisper`. We use the lower-level `sys::Whisper` API directly so we own the prompt construction (needed for the custom-vocabulary feature).
+- **Two STT backends, picked at dictation time**:
+  - **Whisper** (GPU path, and an optional CPU path) via [CTranslate2](https://github.com/OpenNMT/CTranslate2) + [ct2rs](https://codeberg.org/tazz4843/ct2rs) — the same engine that powers `faster-whisper`. Used unconditionally on CUDA. We drive the lower-level `sys::Whisper` API so we own prompt construction (needed for the custom-vocabulary feature).
+  - **Moonshine v2 medium** (default CPU path) via [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) — RTFx 25–40× on AVX2 CPUs at ~6.65 % WER, beating Whisper small.en's ~3–5× RTFx at the same accuracy tier. Loaded once and reused.
 - **Per-device model + compute_type pairs**:
-  - GPU (CUDA): default `Systran/faster-whisper-medium.en`, `INT8_FLOAT16`
-  - CPU: default `Systran/faster-whisper-base.en`, `INT8`
-  - User-overridable via dropdowns in settings.
-- **Energy-based VAD** — trims leading + trailing silence before the mel spectrogram. Cuts encoder time on partial-30 s clips and prevents the silence-tail hallucination loop.
-- **Custom dictionary** — a free-form initial prompt + a vocabulary list get tokenized and prepended to Whisper's decoder prompt with a `<|startofprev|>` marker, biasing the model toward project-specific jargon.
-- **Hallucination filter** — drops known training-residue patterns (`[BLANK_AUDIO]`, `Thanks for watching`, etc.) so they never paste into your editor.
-- **Cross-platform CUDA detection** via `cuda-dynamic-loading` — same binary works with or without an NVIDIA card; falls back to CPU silently.
+  - GPU (CUDA, Whisper): default `Systran/faster-whisper-medium.en`, `INT8_FLOAT16`
+  - CPU (Moonshine, default): k2-fsa's prebuilt v2 medium, INT8
+  - CPU (Whisper, opt-in): default `Systran/faster-whisper-base.en`, `INT8`
+  - All user-overridable in settings; the active backend is named in the tray + settings UI.
+- **Energy-based VAD** — trims leading + trailing silence before encoding. Cuts encoder time on partial-30 s clips and prevents Whisper's silence-tail hallucination loop. Applied to both backends.
+- **Custom dictionary (Whisper only)** — a free-form initial prompt + a vocabulary list get tokenized and prepended to Whisper's decoder prompt with a `<|startofprev|>` marker, biasing the model toward project-specific jargon.
+- **Hallucination filter (Whisper only)** — drops known training-residue patterns (`[BLANK_AUDIO]`, `Thanks for watching`, etc.) so they never paste into your editor. Moonshine doesn't have these training-residue issues, so its output is forwarded as-is.
+- **Cross-platform CUDA detection** via `cuda-dynamic-loading` — same binary works with or without an NVIDIA card; falls back to the CPU path (Moonshine by default) silently.
 
 ## Distribution
 
-End users get **one self-contained .exe** (or `.app` on macOS, `.AppImage` on Linux). CTranslate2's static library is linked into the binary at build time. Whisper model weights download from HuggingFace on first dictation (~150-770 MB depending on the model picked) and cache forever after under `~/.cache/huggingface/hub/`.
+End users get **one self-contained .exe** (or `.app` on macOS, `.AppImage` on Linux). CTranslate2's static library AND sherpa-onnx's ONNX runtime statics are linked into the binary at build time — no separate DLLs to ship. Model weights download on first dictation:
+
+- Whisper: ~150–770 MB from HuggingFace, cached under `~/.cache/huggingface/hub/`.
+- Moonshine v2 medium: ~245 MB from k2-fsa's GitHub releases, extracted into `<app_data_dir>/models/moonshine-medium-en-int8/`.
 
 ## Build prerequisites
 
@@ -39,7 +45,7 @@ Building from source requires:
 - **Node.js** + npm (Tauri's frontend tooling)
 - **CUDA Toolkit** (only required if you want GPU support; the binary works without it)
 
-First clean build takes ~20-30 minutes (the C++ compile of CTranslate2 dominates). Subsequent incremental builds are ~30 s.
+First clean build takes ~20–30 minutes — the C++ compile of CTranslate2 dominates; sherpa-onnx adds ~30 s by downloading its prebuilt static libs from k2-fsa's release artifacts. Subsequent incremental builds are ~30 s.
 
 ```bash
 npm install

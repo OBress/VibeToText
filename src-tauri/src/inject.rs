@@ -5,6 +5,7 @@ use tauri_plugin_clipboard_manager::ClipboardExt;
 
 /// Type a string at the current cursor as if the user typed it.
 /// Used in stream mode for incremental partials.
+#[allow(dead_code)]
 pub fn type_text(s: &str) -> Result<()> {
     let mut enigo = Enigo::new(&Settings::default())?;
     enigo.text(s)?;

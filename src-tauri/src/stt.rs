@@ -1,11 +1,19 @@
 // STT facade: a `DictationSession` owns audio capture + a backend task,
 // and dispatches frames into a pluggable `SttBackend` impl.
 //
-// Today there's exactly one backend — Whisper via whisper.cpp — but
-// the trait stays so we can drop in alternatives (online APIs, future
-// Voxtral revival, etc.) without surgery on the call sites in
-// `lib.rs`.
+// Two backends today:
+//   - `whisper` (CT2 + faster-whisper-* HF repos): used for GPU
+//     mode and as a Whisper fallback for CPU. Higher quality
+//     ceiling, multilingual-capable.
+//   - `moonshine` (sherpa-onnx + Moonshine v2 medium): the
+//     default CPU choice. RTFx 25-40× on AVX2 CPUs (vs Whisper
+//     small.en at ~3-5×), 6.65 % WER, English only.
+//
+// Dispatch happens in `select_backend` based on the resolved
+// device + the user's `cpu_engine` preference (Moonshine or
+// Whisper). GPU always uses Whisper.
 
+mod moonshine;
 mod whisper;
 
 use crate::audio::AudioCapture;
@@ -20,6 +28,7 @@ use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::{sync::Mutex, task::JoinHandle};
 
+pub use moonshine::MoonshineBackend;
 pub use whisper::WhisperBackend;
 
 /// Trait every transcription backend implements. `run` consumes audio
@@ -110,82 +119,175 @@ impl DictationSession {
     }
 }
 
-/// Resolve the backend to use. With Whisper as the only backend, this is
-/// just a lazy-init wrapper around `WhisperBackend::load`. The result is
-/// cached on `AppState` so we don't re-pay the ~547 MB GGML load on each
-/// dictation.
-pub async fn select_backend(app: &AppHandle, cfg: &AppConfig) -> Result<Arc<dyn SttBackend>> {
-    Ok(get_or_init_whisper(app, cfg).await?)
+/// Decide which concrete backend the current config + runtime should
+/// produce, BEFORE building it. Pure function over the config + the
+/// CT2 device probe — no model load, no network. The result feeds two
+/// places: the cache-staleness check (does the cached backend match
+/// what we'd build now?) and the actual lazy-init.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BackendKind {
+    /// Whisper via CT2 + faster-whisper-* HF repos. Used for GPU mode
+    /// always, and CPU mode when the user picks "whisper" in settings.
+    Whisper,
+    /// Moonshine v2 medium via sherpa-onnx. CPU-only path; the
+    /// default CPU choice (RTFx 25-40× vs Whisper small.en at ~3-5×).
+    Moonshine,
 }
 
-async fn get_or_init_whisper(
-    app: &AppHandle,
-    cfg: &AppConfig,
-) -> Result<Arc<dyn SttBackend>> {
-    let state: tauri::State<Arc<crate::AppState>> = app.state();
+fn pick_backend_kind(cfg: &AppConfig) -> Result<BackendKind> {
+    let choice = whisper::resolve_runtime(cfg)
+        .map_err(|e| anyhow!("failed to resolve runtime: {e:#}"))?;
+    use ct2rs::sys::Device;
+    // GPU mode always means Whisper (Moonshine has no CUDA path).
+    // CPU mode honors `cpu_engine`; default is Moonshine. The Device
+    // enum is `#[non_exhaustive]` (or has a sentinel repr range) per
+    // ct2rs 0.9, so we need a wildcard for forward-compat with future
+    // backends like Metal/Vulkan.
+    let kind = if choice.device == Device::CUDA {
+        BackendKind::Whisper
+    } else {
+        // Treat everything non-CUDA as CPU for dispatch purposes.
+        match cfg.cpu_engine.to_ascii_lowercase().as_str() {
+            "whisper" => BackendKind::Whisper,
+            // anything else → Moonshine. "moonshine" is the canonical
+            // value but we accept "" / unknown defensively because
+            // older config.json files won't have the field.
+            _ => BackendKind::Moonshine,
+        }
+    };
+    Ok(kind)
+}
 
-    // Fast path: if a backend is already cached, just hand it back.
-    // We hold the lock for nanoseconds; the actual heavy work
-    // happens outside it.
+/// Backend names emitted to the UI / cache check. Must stay in sync
+/// with the `name()` returns of each impl below.
+const WHISPER_PREFIX: &str = "whisper:";
+const MOONSHINE_PREFIX: &str = "moonshine:";
+
+fn cached_matches(kind: BackendKind, name: &str) -> bool {
+    match kind {
+        BackendKind::Whisper => name.starts_with(WHISPER_PREFIX),
+        BackendKind::Moonshine => name.starts_with(MOONSHINE_PREFIX),
+    }
+}
+
+/// Resolve the backend to use. Lazy-init + cache: the backend is built
+/// on first dictation and reused thereafter, until config changes
+/// invalidate the cache (handled in `lib.rs::save_config`).
+pub async fn select_backend(app: &AppHandle, cfg: &AppConfig) -> Result<Arc<dyn SttBackend>> {
+    let state: tauri::State<Arc<crate::AppState>> = app.state();
+    let want = pick_backend_kind(cfg)?;
+
+    // Fast path: cached backend AND it's the kind we want.
     {
-        let guard = state.whisper.lock().await;
+        let guard = state.backend.lock().await;
         if let Some(b) = guard.as_ref() {
-            return Ok(b.clone() as Arc<dyn SttBackend>);
+            if cached_matches(want, b.name()) {
+                return Ok(b.clone());
+            }
+            // Otherwise the cached backend is stale (user flipped
+            // mode or cpu_engine). Drop the lock and rebuild below;
+            // the actual cache replacement happens after the new
+            // backend is constructed.
+            log::info!(
+                "cached backend {} doesn't match desired kind {:?}; rebuilding",
+                b.name(),
+                want
+            );
         }
     }
 
-    // Slow path: build the backend. We do this OUTSIDE the lock so
-    // model load (1-3 s) doesn't block other awaiters checking
-    // `state.whisper`. If two dictations race in here at the same
-    // time, only one wins the install — the loser drops its built
-    // backend, which is mildly wasteful but safe.
+    // Slow path: build the requested backend OUTSIDE the lock so
+    // model load (1-3 s for Whisper, ~500 ms for Moonshine warm) does
+    // not block other awaiters reading `state.backend`. If two
+    // dictations race in here only one wins the install; the loser
+    // drops its built object — mildly wasteful but safe.
+    let new_backend = match want {
+        BackendKind::Whisper => build_whisper(app, cfg).await?,
+        BackendKind::Moonshine => build_moonshine(app).await?,
+    };
+
+    let mut guard = state.backend.lock().await;
+    // Re-check under the lock: another caller may have populated it
+    // with the same kind in the gap. If so, prefer theirs to avoid
+    // discarding their work; otherwise install ours.
+    if guard
+        .as_ref()
+        .map(|b| !cached_matches(want, b.name()))
+        .unwrap_or(true)
+    {
+        *guard = Some(new_backend.clone());
+    }
+    Ok(guard.as_ref().unwrap().clone())
+}
+
+async fn build_whisper(app: &AppHandle, cfg: &AppConfig) -> Result<Arc<dyn SttBackend>> {
     let _ = app.emit("backend-status", "whisper:loading");
 
-    // Resolve the device + model PAIR up front. The model id we
-    // download depends on which device CT2 will run on (base.en
-    // for CPU, small.en for GPU by default — user-overridable in
-    // settings).
+    // Resolve the device + model PAIR. The model id depends on the
+    // resolved device (base.en for CPU, medium.en for GPU by default
+    // — user-overridable in settings).
     let choice = whisper::resolve_runtime(cfg)
         .map_err(|e| anyhow!("failed to resolve Whisper runtime: {e:#}"))?;
     log::info!(
-        "resolved runtime: device={} compute={} model={}",
+        "resolved Whisper runtime: device={} compute={} model={}",
         choice.device,
         choice.compute_type,
         choice.model_id
     );
 
-    let model_dir =
-        crate::models::ensure_whisper_ready(app, cfg, &choice.model_id).await?;
-    let backend = Arc::new(
+    let model_dir = crate::models::ensure_whisper_ready(app, cfg, &choice.model_id).await?;
+    let backend: Arc<dyn SttBackend> = Arc::new(
         WhisperBackend::new(model_dir, choice)
             .await
             .map_err(|e| anyhow!("failed to initialize Whisper backend: {e:#}"))?,
     );
     let _ = app.emit("backend-status", "whisper:ready");
-
-    let mut guard = state.whisper.lock().await;
-    if guard.is_none() {
-        *guard = Some(backend.clone());
-    }
-    let installed = guard.as_ref().unwrap().clone();
-    Ok(installed as Arc<dyn SttBackend>)
+    Ok(backend)
 }
 
-/// Best-effort: pre-load the CT2 Whisper model in the background at
-/// app start so the first dictation doesn't pay the cold-start cost
-/// (model file mmap + GPU buffer alloc + CUDA init, ~1-3 s).
+async fn build_moonshine(app: &AppHandle) -> Result<Arc<dyn SttBackend>> {
+    let _ = app.emit("backend-status", "moonshine:loading");
+    log::info!("resolved CPU runtime: backend=moonshine v2 medium");
+    let model_dir = crate::models::ensure_moonshine_ready(app).await?;
+    let backend: Arc<dyn SttBackend> = Arc::new(
+        MoonshineBackend::new(model_dir)
+            .await
+            .map_err(|e| anyhow!("failed to initialize Moonshine backend: {e:#}"))?,
+    );
+    let _ = app.emit("backend-status", "moonshine:ready");
+    Ok(backend)
+}
+
+/// Best-effort: pre-load the active backend in the background at app
+/// start so the first dictation doesn't pay the cold-start cost
+/// (Whisper: model mmap + GPU buffer alloc + CUDA init, ~1-3 s;
+/// Moonshine: ONNX session create, ~500 ms).
 /// Skips silently when the model isn't downloaded yet — auto-
-/// downloading 150 MB at every app launch would be surprising on
-/// metered links. The "Download offline assets" button in settings
+/// downloading hundreds of MB at every app launch would be surprising
+/// on metered links. The "Download offline assets" button in settings
 /// is the explicit-consent path.
 pub async fn warm_whisper(app: AppHandle, cfg: AppConfig) {
-    if !crate::models::whisper_already_downloaded(&app, &cfg) {
-        log::info!("Whisper warm-up skipped: model not yet downloaded");
+    let want = match pick_backend_kind(&cfg) {
+        Ok(w) => w,
+        Err(e) => {
+            log::warn!("warm-up skipped: backend kind resolution failed: {e:#}");
+            return;
+        }
+    };
+    let assets_present = match want {
+        BackendKind::Whisper => crate::models::whisper_already_downloaded(&app, &cfg),
+        BackendKind::Moonshine => crate::models::moonshine_already_downloaded(&app),
+    };
+    if !assets_present {
+        log::info!(
+            "warm-up skipped: assets for {:?} not yet downloaded",
+            want
+        );
         return;
     }
-    log::info!("warming Whisper in background…");
-    match get_or_init_whisper(&app, &cfg).await {
-        Ok(_) => log::info!("Whisper warm-up complete"),
-        Err(e) => log::warn!("Whisper warm-up failed: {e:#}"),
+    log::info!("warming {:?} in background…", want);
+    match select_backend(&app, &cfg).await {
+        Ok(_) => log::info!("warm-up complete"),
+        Err(e) => log::warn!("warm-up failed: {e:#}"),
     }
 }

@@ -122,13 +122,13 @@ pub fn resolve_runtime(cfg: &AppConfig) -> Result<RuntimeChoice> {
         device: Device::CUDA,
         compute_type: gpu_compute,
         model_id: cfg.whisper_model_gpu.clone(),
-        label: "ct2:cuda-int8-fp16",
+        label: "whisper:cuda-int8-fp16",
     };
     let pick_cpu = || RuntimeChoice {
         device: Device::CPU,
         compute_type: ComputeType::INT8,
         model_id: cfg.whisper_model_cpu.clone(),
-        label: "ct2:cpu-int8",
+        label: "whisper:cpu-int8",
     };
 
     match cfg.backend_mode.to_ascii_lowercase().as_str() {

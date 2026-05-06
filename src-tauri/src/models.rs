@@ -23,7 +23,9 @@ use anyhow::{anyhow, Context, Result};
 use hf_hub::api::tokio::{Api, ApiError};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
-use tauri::{AppHandle, Emitter};
+// `Manager` brings the `path()` method into scope on AppHandle —
+// without it, `app.path().app_data_dir()` won't resolve.
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::Mutex;
 
 /// Files that must be in the snapshot directory for ct2rs to load
@@ -323,4 +325,256 @@ pub fn whisper_already_downloaded(
 /// so `?` works at the call sites.
 fn api_err(e: ApiError) -> anyhow::Error {
     anyhow!("hf-hub error: {e}")
+}
+
+// ---------------------------------------------------------------------------
+// Moonshine v2 medium model fetcher.
+//
+// The Moonshine engine (sherpa-onnx) loads from a directory
+// containing `encoder.onnx`, `merged_decoder.onnx`, and
+// `tokens.txt`. k2-fsa/sherpa-onnx ships these as a `.tar.bz2`
+// archive on its GitHub releases page. We download once into
+// app_data_dir/models/moonshine-medium-en-int8/, extract, and
+// reuse forever after.
+// ---------------------------------------------------------------------------
+
+/// Pinned URL for the Moonshine v2 medium release archive. If the
+/// upstream k2-fsa team renames the artifact, update this string.
+const MOONSHINE_ARCHIVE_URL: &str =
+    "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-moonshine-medium-en-int8.tar.bz2";
+
+/// Files that must exist inside the extracted directory for
+/// sherpa-onnx to load Moonshine v2.
+const MOONSHINE_REQUIRED_FILES: &[&str] = &["encoder.onnx", "merged_decoder.onnx", "tokens.txt"];
+
+/// Resolved directory where we keep the extracted Moonshine v2
+/// model files. Lives under the OS app-data dir so an uninstall
+/// can clean it up cleanly.
+pub fn moonshine_dir(app: &AppHandle) -> Result<PathBuf> {
+    let base = app.path().app_data_dir().context("app_data_dir")?;
+    Ok(base.join("models").join("moonshine-medium-en-int8"))
+}
+
+/// True if every required Moonshine file is on disk.
+pub fn moonshine_already_downloaded(app: &AppHandle) -> bool {
+    let Ok(dir) = moonshine_dir(app) else {
+        return false;
+    };
+    MOONSHINE_REQUIRED_FILES.iter().all(|f| dir.join(f).exists())
+}
+
+/// Process-wide download lock for Moonshine. Same reasoning as
+/// `model_download_lock` for Whisper — concurrent callers would
+/// otherwise race on the same `.part` archive.
+fn moonshine_download_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
+/// Returns the path to the Moonshine model directory, downloading
+/// + extracting from the upstream sherpa-onnx release archive
+/// first if needed.
+pub async fn ensure_moonshine_ready(app: &AppHandle) -> Result<PathBuf> {
+    let _guard = moonshine_download_lock().lock().await;
+    let dir = moonshine_dir(app)?;
+    std::fs::create_dir_all(&dir)
+        .with_context(|| format!("create moonshine dir {}", dir.display()))?;
+
+    // Fast path: every required file already on disk.
+    if MOONSHINE_REQUIRED_FILES.iter().all(|f| dir.join(f).exists()) {
+        log::debug!("Moonshine model already on disk at {}", dir.display());
+        return Ok(dir);
+    }
+
+    log::info!(
+        "downloading Moonshine v2 medium archive from {}",
+        MOONSHINE_ARCHIVE_URL
+    );
+    let _ = app.emit(
+        "model-download",
+        serde_json::json!({
+            "file": "sherpa-onnx-moonshine-medium-en-int8.tar.bz2",
+            "phase": "starting",
+            "bytes": 0u64,
+            "total": serde_json::Value::Null,
+        }),
+    );
+
+    // Download → temp file in dir.
+    let archive_path = dir.join("download.tar.bz2");
+    download_to_file(app, MOONSHINE_ARCHIVE_URL, &archive_path).await?;
+
+    // Extract .tar.bz2 → flatten any wrapping directory.
+    let _ = app.emit(
+        "model-download",
+        serde_json::json!({
+            "file": "sherpa-onnx-moonshine-medium-en-int8.tar.bz2",
+            "phase": "extracting",
+            "bytes": 0u64,
+            "total": serde_json::Value::Null,
+        }),
+    );
+    extract_tar_bz2(&archive_path, &dir)
+        .with_context(|| format!("extracting {}", archive_path.display()))?;
+    let _ = std::fs::remove_file(&archive_path);
+
+    // Verify required files landed on disk.
+    let missing: Vec<_> = MOONSHINE_REQUIRED_FILES
+        .iter()
+        .filter(|f| !dir.join(f).exists())
+        .collect();
+    if !missing.is_empty() {
+        return Err(anyhow!(
+            "Moonshine extraction finished but required files are missing: {:?}",
+            missing
+        ));
+    }
+
+    log::info!("Moonshine ready at {}", dir.display());
+    let _ = app.emit(
+        "model-download",
+        serde_json::json!({
+            "file": "sherpa-onnx-moonshine-medium-en-int8.tar.bz2",
+            "phase": "done",
+        }),
+    );
+    Ok(dir)
+}
+
+/// Stream-download `url` to `dst`, writing through a `.part` temp
+/// file and atomically renaming on success. Skips if the dst
+/// already exists.
+async fn download_to_file(app: &AppHandle, url: &str, dst: &Path) -> Result<()> {
+    use tokio::io::AsyncWriteExt;
+
+    if dst.exists() {
+        return Ok(());
+    }
+    let tmp = dst.with_extension("part");
+    let resp = reqwest::Client::builder()
+        .user_agent("VibeToText/0.1 (+model-download)")
+        .build()?
+        .get(url)
+        .send()
+        .await
+        .with_context(|| format!("GET {url}"))?;
+    if !resp.status().is_success() {
+        return Err(anyhow!("download {url} failed: HTTP {}", resp.status()));
+    }
+    let total = resp.content_length();
+    let mut stream = resp.bytes_stream();
+    let mut file = tokio::fs::File::create(&tmp)
+        .await
+        .with_context(|| format!("create {}", tmp.display()))?;
+    let mut written: u64 = 0;
+    let mut last_emit: u64 = 0;
+    use futures_util::StreamExt;
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk?;
+        file.write_all(&chunk).await?;
+        written += chunk.len() as u64;
+        if written - last_emit > 1024 * 1024 {
+            last_emit = written;
+            let _ = app.emit(
+                "model-download",
+                serde_json::json!({
+                    "file": dst.file_name().and_then(|s| s.to_str()).unwrap_or(""),
+                    "phase": "progress",
+                    "bytes": written,
+                    "total": total,
+                }),
+            );
+        }
+    }
+    file.flush().await?;
+    drop(file);
+    std::fs::rename(&tmp, dst)
+        .with_context(|| format!("rename {} -> {}", tmp.display(), dst.display()))?;
+    Ok(())
+}
+
+/// Extract `archive` (a `.tar.bz2` file) into `dst`. If the archive
+/// has a single top-level directory wrapping all files, strip it
+/// — sherpa-onnx ships archives with one extra level of nesting.
+fn extract_tar_bz2(archive: &Path, dst: &Path) -> Result<()> {
+    use bzip2::read::BzDecoder;
+    use std::io::{BufReader, Read};
+    use tar::Archive;
+
+    // First pass: probe for a shared top-level directory we'll strip.
+    // We can't iterate the same Archive twice, so we open the file
+    // separately for the probe and again for the real extraction.
+    // Each `Archive` owns its own decoder + file handle.
+    let mut shared_root: Option<String> = None;
+    {
+        let probe_file = std::fs::File::open(archive)
+            .with_context(|| format!("open {}", archive.display()))?;
+        let probe_bz = BzDecoder::new(BufReader::new(probe_file));
+        let mut probe = Archive::new(probe_bz);
+        let mut detect_init = false;
+        for entry in probe.entries()? {
+            let entry = entry?;
+            let path = entry.path()?;
+            let first = path
+                .components()
+                .next()
+                .and_then(|c| c.as_os_str().to_str())
+                .unwrap_or("");
+            if first.is_empty() {
+                continue;
+            }
+            if !detect_init {
+                shared_root = Some(first.to_string());
+                detect_init = true;
+            } else if shared_root.as_deref() != Some(first) {
+                shared_root = None;
+                break;
+            }
+        }
+    } // probe dropped here, file handle closed
+
+    // Second pass: actually extract, stripping shared_root if any.
+    let file = std::fs::File::open(archive)
+        .with_context(|| format!("open {}", archive.display()))?;
+    let bz = BzDecoder::new(BufReader::new(file));
+    let mut tar = Archive::new(bz);
+    for entry in tar.entries()? {
+        let mut entry = entry?;
+        let raw_path = entry.path()?.to_path_buf();
+        let stripped = if let Some(root) = &shared_root {
+            match raw_path.strip_prefix(root) {
+                Ok(p) => p.to_path_buf(),
+                Err(_) => raw_path.clone(),
+            }
+        } else {
+            raw_path.clone()
+        };
+        if stripped.as_os_str().is_empty() {
+            continue;
+        }
+        // Reject path traversal — never trust archive paths.
+        if stripped.components().any(|c| c.as_os_str() == "..") {
+            log::warn!("skipping tar entry with .. traversal: {}", raw_path.display());
+            continue;
+        }
+        let out = dst.join(&stripped);
+        if entry.header().entry_type().is_dir() {
+            std::fs::create_dir_all(&out).ok();
+            continue;
+        }
+        if let Some(parent) = out.parent() {
+            std::fs::create_dir_all(parent).ok();
+        }
+        let mut f = std::fs::File::create(&out)
+            .with_context(|| format!("create {}", out.display()))?;
+        let mut buf = [0u8; 64 * 1024];
+        loop {
+            let n = entry.read(&mut buf)?;
+            if n == 0 {
+                break;
+            }
+            std::io::Write::write_all(&mut f, &buf[..n])?;
+        }
+    }
+    Ok(())
 }

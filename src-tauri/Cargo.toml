@@ -84,6 +84,38 @@ mel_spec = "0.3"
 ndarray = "0.16"
 tokenizers = { version = "0.22", default-features = false, features = ["onig"] }
 
+# CPU dictation engine: sherpa-onnx for Moonshine v2 medium.
+# Moonshine v2 has 245 MB weights, ~6.65 % WER, RTFx 25-40× on
+# modern AVX2 CPU — meaningfully faster than Whisper on the same
+# CPU at equivalent accuracy. sherpa-onnx 1.13 supports v2 via the
+# `OfflineMoonshineModelConfig.merged_decoder` field (v1 needs 4
+# files; v2 needs only encoder + merged_decoder).
+#
+# We use the `shared` (DLL) variant rather than `static` because
+# k2-fsa's prebuilt static libs reference vectorized-stdlib
+# intrinsics like `__std_find_last_of_trivial_pos_1` that only
+# exist in MSVC 14.41+ (VS 2022 17.11+). Many users — including
+# this dev box — still ship 14.40, and updating VS is not something
+# we can automate. Switching to the shared (.dll) build sidesteps
+# the issue: the DLL was linked at build time with its own copy
+# of the runtime, so our .exe just calls into the DLL at run time.
+# Cost: we have to ship `sherpa-onnx-c-api.dll` + `onnxruntime.dll`
+# next to our exe (~150 MB combined). The build script auto-copies
+# them into `target/<profile>/` for `cargo run`; for distribution
+# we add them to `tauri.bundle.resources`.
+sherpa-onnx = { version = "1.13", default-features = false, features = ["shared"] }
+# Pre-built Moonshine ONNX models from k2-fsa/sherpa-onnx releases
+# ship as `.tar.bz2` archives. We download once on first CPU
+# dictation, extract into `app_data_dir/models/`, and point
+# sherpa-onnx at the resulting directory. bzip2 + tar are pure
+# Rust (`tar`) and a thin libbzip2 wrapper — both small.
+bzip2 = "0.4"
+tar = "0.4"
+# HTTP client for the Moonshine archive download. Pinned with
+# rustls-tls (not native-tls) so we don't drag in OpenSSL on Windows.
+# `stream` feature lets us write progress events as bytes flow in.
+reqwest = { version = "0.12", default-features = false, features = ["stream", "rustls-tls"] }
+
 # --- Misc ---
 anyhow = "1"
 log = "0.4"
@@ -120,10 +152,20 @@ windows-sys = { version = "0.59", features = [
 # Intel's iomp, neither of which ships with MSVC's toolchain. With
 # `dnnl` disabled (we use `ruy`), CTranslate2 doesn't need an
 # OpenMP runtime; it threads internally via std::thread.
+# NOTE: we deliberately do NOT enable ct2rs's `tokenizers` or `hub`
+# features. Reasons:
+#
+#   - `tokenizers` pulls in `sentencepiece-sys`, which links its own
+#     copy of protobuf statically. sherpa-onnx-sys (Moonshine) also
+#     statically links protobuf. On MSVC these two protobufs collide
+#     with hundreds of `LNK2005: already defined` errors. We use the
+#     top-level `tokenizers` crate directly for Whisper instead, so
+#     we don't need ct2rs's wrapper.
+#   - `hub` would give us ct2rs::hub::download_model, but we drive
+#     hf-hub directly from `models.rs` (so we get our own progress
+#     events and cache lookup). Dropping it shrinks the dep tree.
 ct2rs = { version = "0.9", default-features = false, features = [
     "whisper",
-    "hub",
-    "tokenizers",
     "ruy",
     "cuda",
     "cuda-dynamic-loading",
@@ -136,8 +178,6 @@ ct2rs = { version = "0.9", default-features = false, features = [
 [target.'cfg(target_os = "macos")'.dependencies]
 ct2rs = { version = "0.9", default-features = false, features = [
     "whisper",
-    "hub",
-    "tokenizers",
     "ruy",
     "accelerate",
 ] }
@@ -150,8 +190,6 @@ ct2rs = { version = "0.9", default-features = false, features = [
 [target.'cfg(target_os = "linux")'.dependencies]
 ct2rs = { version = "0.9", default-features = false, features = [
     "whisper",
-    "hub",
-    "tokenizers",
     "ruy",
     "cuda",
     "cuda-dynamic-loading",

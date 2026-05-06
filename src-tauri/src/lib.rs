@@ -41,12 +41,14 @@ use config::AppConfig;
 pub struct AppState {
     pub config: Mutex<AppConfig>,
     pub session: Mutex<Option<stt::DictationSession>>,
-    /// Lazy-loaded Whisper backend. Cached across dictations so we
-    /// only pay the model-load + CUDA-init cost once. Becomes
-    /// `None` again when the user flips `backend_mode` (auto / gpu
-    /// / cpu) — the next dictation will rebuild against the new
-    /// device choice.
-    pub whisper: Mutex<Option<Arc<stt::WhisperBackend>>>,
+    /// Lazy-loaded transcription backend (Whisper for GPU/Whisper-CPU
+    /// path, Moonshine for default-CPU path). Stored as a trait
+    /// object so the cache can hold either. Cached across dictations
+    /// so we only pay the model-load cost once. Becomes `None` again
+    /// when the user changes anything that would resolve to a
+    /// different backend (mode, model id, cpu_engine) — the next
+    /// dictation will rebuild against the new choice.
+    pub backend: Mutex<Option<Arc<dyn stt::SttBackend>>>,
     /// Name of the active backend ("whisper"), surfaced to the UI for
     /// status display. Kept as `Option` because nothing fills it in
     /// until the first dictation completes the lazy init.
@@ -95,23 +97,26 @@ async fn save_config(
 
     config::save(&app, &new_config).map_err(|e| e.to_string())?;
 
-    // Drop the cached Whisper backend if any of the runtime-relevant
-    // settings changed: the device mode itself, OR either of the
-    // per-device model picks. The next dictation rebuilds with the
-    // new choice. (If the field that changed isn't currently
+    // Drop the cached backend if any of the runtime-relevant
+    // settings changed: the device mode, EITHER per-device model
+    // pick, or the CPU engine choice. The next dictation rebuilds
+    // with the new choice. (If the field that changed isn't currently
     // active — e.g. user edited the GPU model while running in CPU
     // mode — we still drop it; cheap to rebuild and avoids stale
     // mode-mismatch surprises.)
     let mode_changed = old.backend_mode != new_config.backend_mode;
     let cpu_model_changed = old.whisper_model_cpu != new_config.whisper_model_cpu;
     let gpu_model_changed = old.whisper_model_gpu != new_config.whisper_model_gpu;
-    if mode_changed || cpu_model_changed || gpu_model_changed {
-        let mut w = state.whisper.lock().await;
+    let cpu_engine_changed = old.cpu_engine != new_config.cpu_engine;
+    if mode_changed || cpu_model_changed || gpu_model_changed || cpu_engine_changed {
+        let mut w = state.backend.lock().await;
         if w.is_some() {
             log::info!(
-                "Whisper config changed (mode {} → {}, cpu {} → {}, gpu {} → {}); dropping cached backend",
+                "backend config changed (mode {} → {}, cpu_engine {} → {}, cpu {} → {}, gpu {} → {}); dropping cached backend",
                 old.backend_mode,
                 new_config.backend_mode,
+                old.cpu_engine,
+                new_config.cpu_engine,
                 old.whisper_model_cpu,
                 new_config.whisper_model_cpu,
                 old.whisper_model_gpu,
@@ -119,6 +124,9 @@ async fn save_config(
             );
             *w = None;
         }
+        // Also clear the surfaced backend name so the UI doesn't
+        // keep showing a stale "current backend" until next dictation.
+        *state.current_backend.lock().await = None;
     }
 
     // Re-register hotkeys if any changed.
@@ -177,38 +185,80 @@ async fn whisper_model_present(
     state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<bool, String> {
     let cfg = state.config.lock().await.clone();
-    Ok(models::whisper_already_downloaded(&app, &cfg))
+    // "Model present" now means: every asset the current backend_mode
+    // + cpu_engine combination needs is on disk. For `auto` we require
+    // both GPU and CPU paths to be ready (otherwise unplugging the
+    // laptop would silently force a download mid-press).
+    let mode = cfg.backend_mode.to_ascii_lowercase();
+    let cpu_uses_moonshine = cfg.cpu_engine.eq_ignore_ascii_case("moonshine");
+    let cpu_ready = if cpu_uses_moonshine {
+        models::moonshine_already_downloaded(&app)
+    } else {
+        // Reuse the helper, which already handles the "any candidate
+        // present" semantics — close enough for the CPU-Whisper case.
+        models::whisper_already_downloaded(&app, &cfg)
+    };
+    let gpu_ready = models::whisper_already_downloaded(&app, &cfg);
+    let ready = match mode.as_str() {
+        "gpu" | "cuda" => gpu_ready,
+        "cpu" => cpu_ready,
+        _ => cpu_ready && gpu_ready,
+    };
+    Ok(ready)
 }
 
-/// Force-download (or re-download) Whisper model files now.
-/// Backs the "Download model" button in settings. Downloads
-/// whichever model(s) the current `backend_mode` could pick at
-/// runtime — for `auto` that's BOTH the CPU and GPU choices, so
-/// the user is prepared for either device.
+/// Force-download (or re-download) the model assets the current
+/// `backend_mode` + `cpu_engine` could pick at runtime. Backs the
+/// "Download model" button in settings.
+///
+///   - gpu  → Whisper GPU model only.
+///   - cpu  → Whisper CPU model OR Moonshine archive, depending on
+///            `cpu_engine`.
+///   - auto → BOTH the GPU model AND the CPU asset (Moonshine or
+///            Whisper-CPU), so the user is prepared for either
+///            device after `auto` re-resolves at next dictation.
 #[tauri::command]
 async fn download_whisper_model(
     app: tauri::AppHandle,
     state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<(), String> {
     let cfg = state.config.lock().await.clone();
-    // Resolve which model id(s) to download based on backend_mode:
-    //   gpu → just the GPU pick
-    //   cpu → just the CPU pick
-    //   auto/_ → both (user might end up on either device)
     let mode = cfg.backend_mode.to_ascii_lowercase();
-    let model_ids: Vec<String> = match mode.as_str() {
-        "gpu" | "cuda" => vec![cfg.whisper_model_gpu.clone()],
-        "cpu" => vec![cfg.whisper_model_cpu.clone()],
-        _ => {
-            let mut ids = vec![cfg.whisper_model_cpu.clone()];
-            if cfg.whisper_model_gpu != cfg.whisper_model_cpu {
-                ids.push(cfg.whisper_model_gpu.clone());
-            }
-            ids
+    let cpu_uses_moonshine = cfg.cpu_engine.eq_ignore_ascii_case("moonshine");
+
+    let mut whisper_ids: Vec<String> = Vec::new();
+    let mut need_moonshine = false;
+
+    match mode.as_str() {
+        "gpu" | "cuda" => {
+            whisper_ids.push(cfg.whisper_model_gpu.clone());
         }
-    };
-    for id in model_ids {
+        "cpu" => {
+            if cpu_uses_moonshine {
+                need_moonshine = true;
+            } else {
+                whisper_ids.push(cfg.whisper_model_cpu.clone());
+            }
+        }
+        _ => {
+            // auto: prepare both the GPU asset and whichever CPU asset
+            // would win on this machine.
+            whisper_ids.push(cfg.whisper_model_gpu.clone());
+            if cpu_uses_moonshine {
+                need_moonshine = true;
+            } else if cfg.whisper_model_cpu != cfg.whisper_model_gpu {
+                whisper_ids.push(cfg.whisper_model_cpu.clone());
+            }
+        }
+    }
+
+    for id in whisper_ids {
         models::ensure_whisper_ready(&app, &cfg, &id)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    if need_moonshine {
+        models::ensure_moonshine_ready(&app)
             .await
             .map_err(|e| e.to_string())?;
     }
@@ -742,7 +792,7 @@ pub fn run() {
             let state = Arc::new(AppState {
                 config: Mutex::new(cfg.clone()),
                 session: Mutex::new(None),
-                whisper: Mutex::new(None),
+                backend: Mutex::new(None),
                 current_backend: Mutex::new(None),
                 analytics: Mutex::new(analytics_state),
                 start_cancel: AtomicBool::new(false),
@@ -907,7 +957,7 @@ pub(crate) async fn start_dictation(app: &tauri::AppHandle) -> anyhow::Result<()
     // warm, plus the 150 MB download on a truly cold machine).
     // Surface this with a "warming" event so the overlay shows
     // what's happening instead of looking frozen.
-    let warming_emitted = state.whisper.lock().await.is_none();
+    let warming_emitted = state.backend.lock().await.is_none();
     if warming_emitted {
         let _ = app.emit("dictation-state", "warming");
     }
