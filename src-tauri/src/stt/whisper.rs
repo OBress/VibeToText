@@ -361,17 +361,13 @@ impl SttBackend for WhisperBackend {
             }
         }
 
-        // Drain anything cpal already pushed but our consumer hadn't
-        // pulled when `cancel` flipped. Without this we lose the
-        // final 20-200 ms of audio — the user's last word or two —
-        // because the stop sequence is:
-        //   1. stop_dictation sets cancel=true
-        //   2. cpal callback fires once or twice more before its
-        //      stream is dropped, pushing frames into our channel
-        //   3. our loop sees cancel and exits, leaving those frames
-        //      stranded
-        // We also wait a beat for cpal's tail callbacks to land.
-        tokio::time::sleep(Duration::from_millis(60)).await;
+        // Drain frames cpal delivers AFTER we saw cancel. cpal has
+        // 10-50 ms of internal latency between a physical mic
+        // sample and our callback firing, so the user's final word
+        // arrives in the channel only after they've already
+        // released the hotkey. The drain helper polls for ~220 ms
+        // (paired with the 250 ms cpal keep-alive in
+        // DictationSession::stop) and pulls each frame as it lands.
         let drained = crate::stt::drain_remaining_audio(&audio, &mut buf, max_samples).await;
         if drained > 0 {
             log::debug!(

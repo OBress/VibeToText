@@ -231,7 +231,6 @@ impl SttBackend for MoonshineBackend {
         // Drain post-cancel frames so we don't lose the user's last
         // word or two. See the comment on `drain_remaining_audio` in
         // stt.rs for the full reasoning.
-        tokio::time::sleep(Duration::from_millis(60)).await;
         let drained = crate::stt::drain_remaining_audio(&audio, &mut buf, max_samples).await;
         if drained > 0 {
             log::debug!(

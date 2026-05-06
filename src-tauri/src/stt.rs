@@ -31,29 +31,51 @@ use tokio::{sync::Mutex, task::JoinHandle};
 pub use moonshine::MoonshineBackend;
 pub use whisper::WhisperBackend;
 
-/// Drain any frames cpal already pushed into the audio channel but
-/// the backend loop hadn't pulled before `cancel` flipped. Returns
-/// the number of samples appended. Used by both backends after their
-/// main capture loop exits — without this they lose the last
-/// ~20-200 ms of audio (the user's final word or two) because
-/// stop_dictation sets cancel BEFORE cpal's last callback delivers.
+/// Drain frames the audio thread is delivering during cpal's
+/// tail-flush window. cpal's WASAPI/CoreAudio backend has
+/// 10-50 ms of internal latency between a physical mic sample and
+/// our callback firing, so the FINAL frames the user spoke arrive
+/// AFTER `cancel` has been set. We poll the channel for a fixed
+/// duration, sleeping briefly when it's empty, so we collect frames
+/// as cpal delivers them rather than only the ones already queued
+/// at the moment we entered drain.
+///
+/// Pairs with the 250 ms keep-alive in DictationSession::stop —
+/// cpal stays running for at least that long so it can deliver,
+/// while we sit here pulling.
 pub(crate) async fn drain_remaining_audio(
     audio: &Arc<Mutex<Option<crate::audio::AudioCapture>>>,
     buf: &mut Vec<f32>,
     max_samples: usize,
 ) -> usize {
+    use std::time::Instant;
+    let deadline = Instant::now() + Duration::from_millis(220);
     let mut drained = 0usize;
-    let guard = audio.lock().await;
-    let Some(a) = guard.as_ref() else {
+    // We need the channel handle but don't want to hold the audio
+    // mutex for the whole drain (DictationSession::stop's audio.stop()
+    // path also takes that lock). Snapshot the receiver and release.
+    let frames = {
+        let guard = audio.lock().await;
+        guard.as_ref().map(|a| a.frames.clone())
+    };
+    let Some(frames) = frames else {
         return 0;
     };
-    while let Ok(frame) = a.frames.try_recv() {
-        let take = max_samples.saturating_sub(buf.len()).min(frame.0.len());
-        if take == 0 {
-            break;
+    while Instant::now() < deadline {
+        match frames.try_recv() {
+            Ok(frame) => {
+                let take = max_samples.saturating_sub(buf.len()).min(frame.0.len());
+                if take == 0 {
+                    break;
+                }
+                buf.extend_from_slice(&frame.0[..take]);
+                drained += take;
+            }
+            Err(_) => {
+                // Channel empty for now — wait for cpal's next callback.
+                tokio::time::sleep(Duration::from_millis(15)).await;
+            }
         }
-        buf.extend_from_slice(&frame.0[..take]);
-        drained += take;
     }
     drained
 }
@@ -135,7 +157,28 @@ impl DictationSession {
     }
 
     pub async fn stop(self) -> Result<()> {
+        // Set cancel BEFORE killing cpal so the backend's main loop
+        // exits on the next iteration. The backend then enters its
+        // post-cancel drain phase.
         self.cancel.store(true, Ordering::SeqCst);
+
+        // CRITICAL: keep cpal alive for ~250 ms after cancel so its
+        // hardware audio buffer has time to flush into our channel.
+        // Without this delay, the user's last word gets cut off:
+        // cpal's WASAPI/CoreAudio backend has 10-50 ms of internal
+        // latency before a sample physically captured at the mic
+        // shows up in our callback. If we kill the stream the
+        // moment the user releases the hotkey, those samples are
+        // discarded by the OS audio driver before they ever reach
+        // us. 250 ms is safely past the worst-case latency on
+        // every audio backend I tested without being user-
+        // perceivable.
+        //
+        // The backend's drain loop (which runs concurrently with
+        // this sleep, in a separate task) reads the frames as cpal
+        // delivers them.
+        tokio::time::sleep(Duration::from_millis(250)).await;
+
         if let Some(a) = self.audio.lock().await.take() {
             a.stop();
         }
