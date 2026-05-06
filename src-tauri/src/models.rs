@@ -328,31 +328,45 @@ fn api_err(e: ApiError) -> anyhow::Error {
 }
 
 // ---------------------------------------------------------------------------
-// Moonshine v2 medium model fetcher.
+// Moonshine model fetcher.
 //
-// The Moonshine engine (sherpa-onnx) loads from a directory
-// containing `encoder.onnx`, `merged_decoder.onnx`, and
-// `tokens.txt`. k2-fsa/sherpa-onnx ships these as a `.tar.bz2`
-// archive on its GitHub releases page. We download once into
-// app_data_dir/models/moonshine-medium-en-int8/, extract, and
-// reuse forever after.
+// Moonshine (useful-sensors) ships in two sizes — `tiny` (27M params,
+// 12.7% WER) and `base` (61M params, 6.65% WER). We pick `base`
+// because the WER advantage is huge and the model is still ~250 MB
+// — small enough that downloading it on first dictation is fine.
+//
+// k2-fsa's sherpa-onnx ships prebuilt INT8 ONNX exports of v1 base
+// at this archive URL on their `asr-models` GitHub release. The v1
+// model is split across four ONNX files (preprocess, encode,
+// cached_decode, uncached_decode) — the same layout the official
+// Moonshine reference inference loop expects. v2 uses a single
+// `merged_decoder` file but isn't shipped in `medium-en` form by
+// sherpa-onnx as of 1.13.
 // ---------------------------------------------------------------------------
 
-/// Pinned URL for the Moonshine v2 medium release archive. If the
-/// upstream k2-fsa team renames the artifact, update this string.
+/// Pinned URL for the Moonshine v1 base-en INT8 release archive. If
+/// the upstream k2-fsa team renames or moves the artifact, update
+/// this string.
 const MOONSHINE_ARCHIVE_URL: &str =
-    "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-moonshine-medium-en-int8.tar.bz2";
+    "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-moonshine-base-en-int8.tar.bz2";
 
 /// Files that must exist inside the extracted directory for
-/// sherpa-onnx to load Moonshine v2.
-const MOONSHINE_REQUIRED_FILES: &[&str] = &["encoder.onnx", "merged_decoder.onnx", "tokens.txt"];
+/// sherpa-onnx's `OfflineMoonshineModelConfig` to load. v1 needs
+/// the four ONNX components plus the tokens table.
+const MOONSHINE_REQUIRED_FILES: &[&str] = &[
+    "preprocess.onnx",
+    "encode.int8.onnx",
+    "cached_decode.int8.onnx",
+    "uncached_decode.int8.onnx",
+    "tokens.txt",
+];
 
-/// Resolved directory where we keep the extracted Moonshine v2
-/// model files. Lives under the OS app-data dir so an uninstall
-/// can clean it up cleanly.
+/// Resolved directory where we keep the extracted Moonshine model
+/// files. Lives under the OS app-data dir so an uninstall can clean
+/// it up cleanly.
 pub fn moonshine_dir(app: &AppHandle) -> Result<PathBuf> {
     let base = app.path().app_data_dir().context("app_data_dir")?;
-    Ok(base.join("models").join("moonshine-medium-en-int8"))
+    Ok(base.join("models").join("moonshine-base-en-int8"))
 }
 
 /// True if every required Moonshine file is on disk.
@@ -387,13 +401,14 @@ pub async fn ensure_moonshine_ready(app: &AppHandle) -> Result<PathBuf> {
     }
 
     log::info!(
-        "downloading Moonshine v2 medium archive from {}",
+        "downloading Moonshine base-en INT8 archive from {}",
         MOONSHINE_ARCHIVE_URL
     );
+    let archive_label = "sherpa-onnx-moonshine-base-en-int8.tar.bz2";
     let _ = app.emit(
         "model-download",
         serde_json::json!({
-            "file": "sherpa-onnx-moonshine-medium-en-int8.tar.bz2",
+            "file": archive_label,
             "phase": "starting",
             "bytes": 0u64,
             "total": serde_json::Value::Null,
@@ -408,7 +423,7 @@ pub async fn ensure_moonshine_ready(app: &AppHandle) -> Result<PathBuf> {
     let _ = app.emit(
         "model-download",
         serde_json::json!({
-            "file": "sherpa-onnx-moonshine-medium-en-int8.tar.bz2",
+            "file": archive_label,
             "phase": "extracting",
             "bytes": 0u64,
             "total": serde_json::Value::Null,
@@ -434,7 +449,7 @@ pub async fn ensure_moonshine_ready(app: &AppHandle) -> Result<PathBuf> {
     let _ = app.emit(
         "model-download",
         serde_json::json!({
-            "file": "sherpa-onnx-moonshine-medium-en-int8.tar.bz2",
+            "file": archive_label,
             "phase": "done",
         }),
     );

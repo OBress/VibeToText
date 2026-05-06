@@ -38,9 +38,9 @@ pub struct AppConfig {
     pub backend_mode: String,
 
     /// Engine to use when the resolved device is CPU. One of:
-    ///   - "moonshine" (default): Moonshine v2 medium via
+    ///   - "moonshine" (default): Moonshine v1 base-en (INT8) via
     ///     sherpa-onnx. ~6.65% WER, RTFx 25-40× on AVX2 CPUs.
-    ///     The Better CPU choice for an English-only dictation
+    ///     The better CPU choice for an English-only dictation
     ///     workflow.
     ///   - "whisper": faster-whisper-* via ct2rs. Slower on CPU
     ///     (~3-5× RTFx for small.en) but offers wider model

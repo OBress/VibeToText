@@ -1,23 +1,28 @@
-// Moonshine v2 medium backend, powered by sherpa-onnx.
+// Moonshine base-en backend, powered by sherpa-onnx.
 //
 // Why a separate backend from Whisper:
 //
 //   - Moonshine has a fundamentally different architecture from
 //     Whisper (sliding-window encoder vs Whisper's fixed 30s mel
-//     padding). The user's reference benchmarks have Moonshine v2
-//     medium at RTFx 25-40× on a modern AVX2 CPU vs Whisper
-//     small.en at ~3-5× on the same hardware. Big win for the
-//     CPU-only path.
+//     padding). On a modern AVX2 CPU, Moonshine base hits RTFx
+//     25-40× vs Whisper small.en at ~3-5× on the same hardware
+//     — big win for the CPU-only path. WER is comparable: 6.65%
+//     base / 7% small.en.
 //
-//   - Moonshine v2 isn't supported by ct2rs/CTranslate2; we use
+//   - Moonshine isn't supported by ct2rs/CTranslate2; we use
 //     sherpa-onnx (the k2-fsa C++ ASR runtime that ships
-//     prebuilt binaries via GitHub releases). sherpa-onnx 1.13+
-//     supports v2 explicitly via `merged_decoder` — v1 needed 4
-//     model files, v2 needs only 2.
+//     prebuilt binaries via GitHub releases).
+//
+//   - We use Moonshine v1 base (split across 4 ONNX files:
+//     preprocess, encode, cached_decode, uncached_decode) because
+//     that's what k2-fsa publishes as `moonshine-base-en-int8`.
+//     v2's single-file `merged_decoder` exists in sherpa-onnx but
+//     k2-fsa hasn't shipped a base/medium English INT8 v2 build
+//     in their `asr-models` release.
 //
 // We ship Moonshine as the DEFAULT CPU choice while keeping
 // Whisper available for both CPU + GPU. The dispatch lives in
-// `stt.rs::resolve_runtime` — for `backend_mode = "cpu"` (or
+// `stt.rs::pick_backend_kind` — for `backend_mode = "cpu"` (or
 // "auto" with no GPU) the runtime picks Moonshine; "gpu" mode
 // always picks Whisper.
 
@@ -70,18 +75,24 @@ unsafe impl Send for MoonshineInner {}
 unsafe impl Sync for MoonshineInner {}
 
 impl MoonshineBackend {
-    /// Load the Moonshine v2 medium model directory. Expects:
-    ///   model_dir/encoder.onnx
-    ///   model_dir/merged_decoder.onnx
+    /// Load the Moonshine v1 base-en model directory. Expects:
+    ///   model_dir/preprocess.onnx
+    ///   model_dir/encode.int8.onnx
+    ///   model_dir/cached_decode.int8.onnx
+    ///   model_dir/uncached_decode.int8.onnx
     ///   model_dir/tokens.txt
     pub async fn new(model_dir: PathBuf) -> Result<Self> {
-        let encoder = model_dir.join("encoder.onnx");
-        let decoder = model_dir.join("merged_decoder.onnx");
+        let preprocess = model_dir.join("preprocess.onnx");
+        let encoder = model_dir.join("encode.int8.onnx");
+        let cached_decoder = model_dir.join("cached_decode.int8.onnx");
+        let uncached_decoder = model_dir.join("uncached_decode.int8.onnx");
         let tokens = model_dir.join("tokens.txt");
 
         for (label, p) in [
-            ("encoder.onnx", &encoder),
-            ("merged_decoder.onnx", &decoder),
+            ("preprocess.onnx", &preprocess),
+            ("encode.int8.onnx", &encoder),
+            ("cached_decode.int8.onnx", &cached_decoder),
+            ("uncached_decode.int8.onnx", &uncached_decoder),
             ("tokens.txt", &tokens),
         ] {
             if !p.exists() {
@@ -94,7 +105,7 @@ impl MoonshineBackend {
         }
 
         log::info!(
-            "Moonshine: loading from {} (encoder + merged_decoder)",
+            "Moonshine: loading v1 base-en from {} (preprocess + encode + cached_decode + uncached_decode)",
             model_dir.display()
         );
 
@@ -103,9 +114,11 @@ impl MoonshineBackend {
             let mut config = OfflineRecognizerConfig::default();
             config.model_config = OfflineModelConfig {
                 moonshine: OfflineMoonshineModelConfig {
+                    preprocessor: Some(path_to_string(&preprocess)),
                     encoder: Some(path_to_string(&encoder)),
-                    merged_decoder: Some(path_to_string(&decoder)),
-                    ..Default::default()
+                    cached_decoder: Some(path_to_string(&cached_decoder)),
+                    uncached_decoder: Some(path_to_string(&uncached_decoder)),
+                    merged_decoder: None,
                 },
                 tokens: Some(path_to_string(&tokens)),
                 num_threads: threads as i32,
@@ -146,7 +159,7 @@ fn path_to_string(p: &Path) -> String {
 #[async_trait]
 impl SttBackend for MoonshineBackend {
     fn name(&self) -> &'static str {
-        "moonshine:v2-medium"
+        "moonshine:base-en-int8"
     }
 
     async fn run(

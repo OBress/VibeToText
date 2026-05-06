@@ -5,9 +5,9 @@
 //   - `whisper` (CT2 + faster-whisper-* HF repos): used for GPU
 //     mode and as a Whisper fallback for CPU. Higher quality
 //     ceiling, multilingual-capable.
-//   - `moonshine` (sherpa-onnx + Moonshine v2 medium): the
-//     default CPU choice. RTFx 25-40× on AVX2 CPUs (vs Whisper
-//     small.en at ~3-5×), 6.65 % WER, English only.
+//   - `moonshine` (sherpa-onnx + Moonshine v1 base-en INT8):
+//     the default CPU choice. RTFx 25-40× on AVX2 CPUs (vs
+//     Whisper small.en at ~3-5×), 6.65 % WER, English only.
 //
 // Dispatch happens in `select_backend` based on the resolved
 // device + the user's `cpu_engine` preference (Moonshine or
@@ -129,8 +129,9 @@ enum BackendKind {
     /// Whisper via CT2 + faster-whisper-* HF repos. Used for GPU mode
     /// always, and CPU mode when the user picks "whisper" in settings.
     Whisper,
-    /// Moonshine v2 medium via sherpa-onnx. CPU-only path; the
-    /// default CPU choice (RTFx 25-40× vs Whisper small.en at ~3-5×).
+    /// Moonshine v1 base-en INT8 via sherpa-onnx. CPU-only path;
+    /// the default CPU choice (RTFx 25-40× vs Whisper small.en at
+    /// ~3-5×).
     Moonshine,
 }
 
@@ -247,7 +248,7 @@ async fn build_whisper(app: &AppHandle, cfg: &AppConfig) -> Result<Arc<dyn SttBa
 
 async fn build_moonshine(app: &AppHandle) -> Result<Arc<dyn SttBackend>> {
     let _ = app.emit("backend-status", "moonshine:loading");
-    log::info!("resolved CPU runtime: backend=moonshine v2 medium");
+    log::info!("resolved CPU runtime: backend=moonshine base-en (INT8)");
     let model_dir = crate::models::ensure_moonshine_ready(app).await?;
     let backend: Arc<dyn SttBackend> = Arc::new(
         MoonshineBackend::new(model_dir)
@@ -262,10 +263,17 @@ async fn build_moonshine(app: &AppHandle) -> Result<Arc<dyn SttBackend>> {
 /// start so the first dictation doesn't pay the cold-start cost
 /// (Whisper: model mmap + GPU buffer alloc + CUDA init, ~1-3 s;
 /// Moonshine: ONNX session create, ~500 ms).
-/// Skips silently when the model isn't downloaded yet — auto-
-/// downloading hundreds of MB at every app launch would be surprising
-/// on metered links. The "Download offline assets" button in settings
-/// is the explicit-consent path.
+///
+/// For backends with assets already on disk this is the warm-up
+/// itself. For backends whose assets are missing the behavior splits:
+///   - Whisper: skip silently. The default model varies a lot in
+///     size (40 MB tiny → 1.5 GB large-v3) and we don't want to
+///     surprise a metered-link user with a 1.5 GB download at app
+///     launch. They'll get an explicit-consent flow via the
+///     "Download model" button or the first dictation press.
+///   - Moonshine: same skip-silent behavior; the user has to opt
+///     in via "Download model" before Moonshine works. (We also
+///     trigger download lazily on first dictation.)
 pub async fn warm_whisper(app: AppHandle, cfg: AppConfig) {
     let want = match pick_backend_kind(&cfg) {
         Ok(w) => w,
@@ -279,11 +287,31 @@ pub async fn warm_whisper(app: AppHandle, cfg: AppConfig) {
         BackendKind::Moonshine => crate::models::moonshine_already_downloaded(&app),
     };
     if !assets_present {
-        log::info!(
-            "warm-up skipped: assets for {:?} not yet downloaded",
-            want
-        );
-        return;
+        // Moonshine is small (~250 MB) and is pinned to a single
+        // file set, so we proactively fetch it on first launch when
+        // it's the active backend — the alternative (silently
+        // skip) would block the very first dictation for ~30 s on
+        // download. Whisper still skips because variant size ranges
+        // 40 MB → 1.5 GB and we don't want to surprise a metered-
+        // link user.
+        match want {
+            BackendKind::Moonshine => {
+                log::info!("warm-up: Moonshine assets missing, fetching now…");
+                match crate::models::ensure_moonshine_ready(&app).await {
+                    Ok(_) => log::info!("warm-up: Moonshine download complete"),
+                    Err(e) => {
+                        log::warn!("warm-up: Moonshine download failed: {e:#}");
+                        return;
+                    }
+                }
+            }
+            BackendKind::Whisper => {
+                log::info!(
+                    "warm-up skipped: Whisper model not yet downloaded (use the Download button in settings)",
+                );
+                return;
+            }
+        }
     }
     log::info!("warming {:?} in background…", want);
     match select_backend(&app, &cfg).await {

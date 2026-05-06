@@ -17,10 +17,10 @@ The app is designed around **push-to-talk** — you hold the hotkey while speaki
 - **Hotkey capture** — `tauri-plugin-global-shortcut` for normal combos, plus a Windows Raw Input listener for modifier-only hotkeys like `Ctrl+Shift` (which `RegisterHotKey` can't reliably deliver).
 - **Two STT backends, picked at dictation time**:
   - **Whisper** (GPU path, and an optional CPU path) via [CTranslate2](https://github.com/OpenNMT/CTranslate2) + [ct2rs](https://codeberg.org/tazz4843/ct2rs) — the same engine that powers `faster-whisper`. Used unconditionally on CUDA. We drive the lower-level `sys::Whisper` API so we own prompt construction (needed for the custom-vocabulary feature).
-  - **Moonshine v2 medium** (default CPU path) via [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) — RTFx 25–40× on AVX2 CPUs at ~6.65 % WER, beating Whisper small.en's ~3–5× RTFx at the same accuracy tier. Loaded once and reused.
+  - **Moonshine base-en** (default CPU path) via [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) — RTFx 25–40× on AVX2 CPUs at ~6.65 % WER, beating Whisper small.en's ~3–5× RTFx at the same accuracy tier. Loaded once and reused.
 - **Per-device model + compute_type pairs**:
   - GPU (CUDA, Whisper): default `Systran/faster-whisper-medium.en`, `INT8_FLOAT16`
-  - CPU (Moonshine, default): k2-fsa's prebuilt v2 medium, INT8
+  - CPU (Moonshine, default): k2-fsa's prebuilt v1 base-en, INT8
   - CPU (Whisper, opt-in): default `Systran/faster-whisper-base.en`, `INT8`
   - All user-overridable in settings; the active backend is named in the tray + settings UI.
 - **Energy-based VAD** — trims leading + trailing silence before encoding. Cuts encoder time on partial-30 s clips and prevents Whisper's silence-tail hallucination loop. Applied to both backends.
@@ -33,7 +33,7 @@ The app is designed around **push-to-talk** — you hold the hotkey while speaki
 End users get **one self-contained .exe** (or `.app` on macOS, `.AppImage` on Linux). CTranslate2's static library AND sherpa-onnx's ONNX runtime statics are linked into the binary at build time — no separate DLLs to ship. Model weights download on first dictation:
 
 - Whisper: ~150–770 MB from HuggingFace, cached under `~/.cache/huggingface/hub/`.
-- Moonshine v2 medium: ~245 MB from k2-fsa's GitHub releases, extracted into `<app_data_dir>/models/moonshine-medium-en-int8/`.
+- Moonshine base-en (INT8): ~250 MB from k2-fsa's GitHub releases, extracted into `<app_data_dir>/models/moonshine-base-en-int8/`.
 
 ## Build prerequisites
 
