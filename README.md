@@ -41,24 +41,20 @@ round-trip, no audio leaves your machine.
 
 ### Linux
 
-Pick whichever package fits your distro:
-
 ```bash
-# Debian / Ubuntu / Mint / PopOS / etc.
+# Debian / Ubuntu / Mint / Pop!_OS / etc.
 sudo dpkg -i vibe-to-text_<version>_amd64.deb
 # Resolves any missing system deps:
 sudo apt -f install
-
-# Distro-agnostic single-file binary
-chmod +x vibe-to-text_<version>_amd64.AppImage
-./vibe-to-text_<version>_amd64.AppImage
 ```
 
 Then launch **VibeToText** from your app launcher and press the hotkey.
 
-You may need `libwebkit2gtk-4.1-0` and `libgtk-3-0` installed
-(present on most desktops out of the box; the `.deb` declares them
-as dependencies).
+The `.deb` declares `libwebkit2gtk-4.1-0` + `libgtk-3-0` as
+dependencies; both are present on most desktops out of the box.
+
+Other distros: extract the `.deb` with `ar x` (it's a tar archive
+under the hood) or build from source per [BUILDING.md](BUILDING.md).
 
 ---
 

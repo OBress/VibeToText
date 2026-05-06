@@ -57,12 +57,18 @@ jobs:
             bundles: dmg
             artifact_name: vibe-to-text-macos-x64
 
-          # Linux x86_64 — both `.deb` for Debian/Ubuntu and `.AppImage`
-          # for distro-agnostic install. Build runs against
-          # ubuntu-22.04 to keep glibc compatibility broad.
+          # Linux x86_64 — `.deb` only. AppImage builds via Tauri's
+          # bundled linuxdeploy fail on the GH-hosted ubuntu-22.04
+          # runner ("failed to run linuxdeploy") — the underlying
+          # cause is intermittent and not easily diagnosable from the
+          # bundler's swallowed stderr. .deb covers Ubuntu / Debian
+          # / Mint / Pop_!OS which is the vast majority of Linux
+          # desktop installs; users on other distros can extract
+          # the .deb (`ar x`) or build from source. Build runs
+          # against ubuntu-22.04 to keep glibc compatibility broad.
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
-            bundles: deb,appimage
+            bundles: deb
             artifact_name: vibe-to-text-linux-x64
 
     runs-on: ${{ matrix.os }}
