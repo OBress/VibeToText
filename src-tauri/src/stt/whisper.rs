@@ -33,8 +33,8 @@ use crate::vad;
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use ct2rs::sys::{
-    get_device_count, ComputeType, Config as CtConfig, Device, StorageView,
-    Whisper as SysWhisper, WhisperOptions,
+    get_device_count, ComputeType, Config as CtConfig, Device, StorageView, Whisper as SysWhisper,
+    WhisperOptions,
 };
 use mel_spec::mel::{log_mel_spectrogram, mel, norm_mel};
 use mel_spec::stft::Spectrogram;
@@ -179,8 +179,7 @@ impl PreprocessorConfig {
             nb_max_frames: usize,
             sampling_rate: usize,
         }
-        let file = File::open(path)
-            .with_context(|| format!("open {}", path.display()))?;
+        let file = File::open(path).with_context(|| format!("open {}", path.display()))?;
         let aux: Aux = serde_json::from_reader(BufReader::new(file))
             .with_context(|| format!("parse {}", path.display()))?;
 
@@ -346,9 +345,7 @@ impl SttBackend for WhisperBackend {
                 Some(f) => {
                     if buf.len() + f.0.len() > max_samples {
                         if !warned_overflow {
-                            log::warn!(
-                                "Whisper: audio exceeds {MAX_SECONDS}s cap; truncating"
-                            );
+                            log::warn!("Whisper: audio exceeds {MAX_SECONDS}s cap; truncating");
                             warned_overflow = true;
                         }
                         let take = max_samples.saturating_sub(buf.len());
@@ -409,7 +406,12 @@ impl SttBackend for WhisperBackend {
                 .inflight
                 .lock()
                 .map_err(|_| anyhow!("Whisper inflight mutex poisoned"))?;
-            transcribe_one(&inner, &trimmed_samples, initial_prompt.as_deref(), backend_label)
+            transcribe_one(
+                &inner,
+                &trimmed_samples,
+                initial_prompt.as_deref(),
+                backend_label,
+            )
         })
         .await
         .map_err(|e| anyhow!("inference task: {e}"))??;
@@ -500,12 +502,10 @@ fn transcribe_one(
         let mut mel_chunk = Array2::<f32>::zeros((cfg.feature_size, cfg.nb_max_frames));
         for (i, frame) in chunk.chunks(cfg.hop_length).enumerate() {
             if let Some(fft_frame) = stft.add(frame) {
-                let mel = norm_mel(&log_mel_spectrogram(&fft_frame, &cfg.mel_filters))
-                    .mapv(|v| v as f32);
+                let mel =
+                    norm_mel(&log_mel_spectrogram(&fft_frame, &cfg.mel_filters)).mapv(|v| v as f32);
                 if i < cfg.nb_max_frames {
-                    mel_chunk
-                        .slice_mut(s![.., i])
-                        .assign(&mel.slice(s![.., 0]));
+                    mel_chunk.slice_mut(s![.., i]).assign(&mel.slice(s![.., 0]));
                 }
             }
         }
@@ -520,8 +520,7 @@ fn transcribe_one(
     // nb_max_frames). Ensure standard memory layout — CTranslate2's
     // C++ side expects contiguous row-major.
     let views: Vec<_> = mel_per_chunk.iter().map(|a| a.view()).collect();
-    let mut mel_3d = stack(Axis(0), &views)
-        .context("stacking mel spectrogram chunks")?;
+    let mut mel_3d = stack(Axis(0), &views).context("stacking mel spectrogram chunks")?;
     if !mel_3d.is_standard_layout() {
         mel_3d = mel_3d.as_standard_layout().into_owned();
     }
@@ -544,11 +543,8 @@ fn transcribe_one(
     // re-emit them in the output.
     //
     // Standard Whisper prompt suffix: <|sot|> <|en|> <|transcribe|> <|notimestamps|>
-    let prompt_strings: Vec<String> = build_prompt_tokens(
-        &inner.tokenizer,
-        initial_prompt,
-        backend_label,
-    )?;
+    let prompt_strings: Vec<String> =
+        build_prompt_tokens(&inner.tokenizer, initial_prompt, backend_label)?;
 
     // === Decoder options ===
     // beam_size=5 matches OpenAI Whisper's reference default. With
@@ -591,7 +587,10 @@ fn transcribe_one(
         .whisper
         .generate(&storage_view, &prompts, &opts)
         .map_err(|e| anyhow!("sys::Whisper::generate: {e}"))?;
-    log::debug!("{backend_label}: {} result chunk(s) returned", results.len());
+    log::debug!(
+        "{backend_label}: {} result chunk(s) returned",
+        results.len()
+    );
 
     // === Decode tokens to text ===
     // Each result has `sequences_ids[0]` = generated token IDs
@@ -637,11 +636,7 @@ fn build_prompt_tokens(
             let encoded = tokenizer
                 .encode(trimmed, false)
                 .map_err(|e| anyhow!("tokenize initial_prompt: {e}"))?;
-            let pieces: Vec<String> = encoded
-                .get_tokens()
-                .iter()
-                .map(|s| s.to_string())
-                .collect();
+            let pieces: Vec<String> = encoded.get_tokens().iter().map(|s| s.to_string()).collect();
 
             // Whisper's prompt is capped at 224 tokens (n_text_ctx
             // / 2). Truncate if the user dumped a wall of text —
@@ -699,10 +694,7 @@ fn build_initial_prompt(cfg: &AppConfig) -> Option<String> {
         // Comma-separate the vocab list and embed it in a sentence
         // that nudges Whisper to treat them as proper-noun
         // vocabulary. Same shape the reference Python project uses.
-        parts.push(format!(
-            "Important vocabulary: {}.",
-            dict.join(", ")
-        ));
+        parts.push(format!("Important vocabulary: {}.", dict.join(", ")));
     }
     Some(parts.join(" "))
 }
@@ -717,9 +709,7 @@ fn is_hallucination(text: &str) -> bool {
     if HALLUCINATION_EXACT.iter().any(|p| trimmed == *p) {
         return true;
     }
-    if trimmed.len() < 60
-        && HALLUCINATION_CONTAINS.iter().any(|p| trimmed.contains(p))
-    {
+    if trimmed.len() < 60 && HALLUCINATION_CONTAINS.iter().any(|p| trimmed.contains(p)) {
         return true;
     }
     false

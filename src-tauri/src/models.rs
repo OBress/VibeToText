@@ -31,11 +31,7 @@ use tokio::sync::Mutex;
 /// Files that must be in the snapshot directory for ct2rs to load
 /// the model. Everything else (.gitattributes, README, vocabulary
 /// variant files) is bonus.
-const REQUIRED_FILES: &[&str] = &[
-    "model.bin",
-    "config.json",
-    "tokenizer.json",
-];
+const REQUIRED_FILES: &[&str] = &["model.bin", "config.json", "tokenizer.json"];
 
 /// Process-wide download lock: serializes ensure_whisper_ready so
 /// concurrent callers (start_dictation race + the settings UI's
@@ -155,13 +151,13 @@ pub async fn ensure_whisper_ready(
 
     // Slow path: download via hf-hub.
     log::info!("downloading CT2 Whisper model {model_id} from HuggingFace");
-    let api = Api::new()
-        .map_err(api_err)
-        .context("hf_hub Api init")?;
+    let api = Api::new().map_err(api_err).context("hf_hub Api init")?;
     let repo = api.model(model_id.to_string());
-    let info = repo.info().await.map_err(api_err).with_context(|| {
-        format!("HF repo info for {model_id}")
-    })?;
+    let info = repo
+        .info()
+        .await
+        .map_err(api_err)
+        .with_context(|| format!("HF repo info for {model_id}"))?;
 
     let siblings: Vec<_> = info
         .siblings
@@ -195,9 +191,7 @@ pub async fn ensure_whisper_ready(
         }
         completed += 1;
 
-        let bytes = std::fs::metadata(&cached)
-            .map(|m| m.len())
-            .unwrap_or(0);
+        let bytes = std::fs::metadata(&cached).map(|m| m.len()).unwrap_or(0);
         let _ = app.emit(
             "model-download",
             serde_json::json!({
@@ -217,8 +211,7 @@ pub async fn ensure_whisper_ready(
         );
     }
 
-    let dst = snapshot_dir
-        .ok_or_else(|| anyhow!("hf-hub returned no files for {model_id}"))?;
+    let dst = snapshot_dir.ok_or_else(|| anyhow!("hf-hub returned no files for {model_id}"))?;
 
     // Verify ct2rs's required files are present.
     let missing: Vec<_> = REQUIRED_FILES
@@ -281,8 +274,7 @@ fn synthesize_preprocessor_config(model_dir: &Path, model_id: &str) -> Result<()
         "sampling_rate": 16_000,
     });
     let json_str = serde_json::to_string_pretty(&json)?;
-    std::fs::write(&pcfg, json_str)
-        .with_context(|| format!("write {}", pcfg.display()))?;
+    std::fs::write(&pcfg, json_str).with_context(|| format!("write {}", pcfg.display()))?;
     log::info!(
         "synthesized preprocessor_config.json (feature_size={feature_size}) for {model_id} at {}",
         pcfg.display()
@@ -295,10 +287,7 @@ fn synthesize_preprocessor_config(model_dir: &Path, model_id: &str) -> Result<()
 /// paths. Used by `warm_whisper` at app startup to decide whether
 /// to preload — we don't auto-download in the background, so this
 /// returns false only when EVERY candidate model is missing.
-pub fn whisper_already_downloaded(
-    _app: &AppHandle,
-    cfg: &crate::config::AppConfig,
-) -> bool {
+pub fn whisper_already_downloaded(_app: &AppHandle, cfg: &crate::config::AppConfig) -> bool {
     if let Some(p) = cfg.whisper_model_dir.as_ref().filter(|s| !s.is_empty()) {
         let dir = PathBuf::from(p);
         if REQUIRED_FILES.iter().all(|f| dir.join(f).exists()) {
@@ -374,7 +363,9 @@ pub fn moonshine_already_downloaded(app: &AppHandle) -> bool {
     let Ok(dir) = moonshine_dir(app) else {
         return false;
     };
-    MOONSHINE_REQUIRED_FILES.iter().all(|f| dir.join(f).exists())
+    MOONSHINE_REQUIRED_FILES
+        .iter()
+        .all(|f| dir.join(f).exists())
 }
 
 /// Process-wide download lock for Moonshine. Same reasoning as
@@ -395,7 +386,10 @@ pub async fn ensure_moonshine_ready(app: &AppHandle) -> Result<PathBuf> {
         .with_context(|| format!("create moonshine dir {}", dir.display()))?;
 
     // Fast path: every required file already on disk.
-    if MOONSHINE_REQUIRED_FILES.iter().all(|f| dir.join(f).exists()) {
+    if MOONSHINE_REQUIRED_FILES
+        .iter()
+        .all(|f| dir.join(f).exists())
+    {
         log::debug!("Moonshine model already on disk at {}", dir.display());
         return Ok(dir);
     }
@@ -522,8 +516,8 @@ fn extract_tar_bz2(archive: &Path, dst: &Path) -> Result<()> {
     // Each `Archive` owns its own decoder + file handle.
     let mut shared_root: Option<String> = None;
     {
-        let probe_file = std::fs::File::open(archive)
-            .with_context(|| format!("open {}", archive.display()))?;
+        let probe_file =
+            std::fs::File::open(archive).with_context(|| format!("open {}", archive.display()))?;
         let probe_bz = BzDecoder::new(BufReader::new(probe_file));
         let mut probe = Archive::new(probe_bz);
         let mut detect_init = false;
@@ -549,8 +543,8 @@ fn extract_tar_bz2(archive: &Path, dst: &Path) -> Result<()> {
     } // probe dropped here, file handle closed
 
     // Second pass: actually extract, stripping shared_root if any.
-    let file = std::fs::File::open(archive)
-        .with_context(|| format!("open {}", archive.display()))?;
+    let file =
+        std::fs::File::open(archive).with_context(|| format!("open {}", archive.display()))?;
     let bz = BzDecoder::new(BufReader::new(file));
     let mut tar = Archive::new(bz);
     for entry in tar.entries()? {
@@ -569,7 +563,10 @@ fn extract_tar_bz2(archive: &Path, dst: &Path) -> Result<()> {
         }
         // Reject path traversal — never trust archive paths.
         if stripped.components().any(|c| c.as_os_str() == "..") {
-            log::warn!("skipping tar entry with .. traversal: {}", raw_path.display());
+            log::warn!(
+                "skipping tar entry with .. traversal: {}",
+                raw_path.display()
+            );
             continue;
         }
         let out = dst.join(&stripped);
@@ -580,8 +577,8 @@ fn extract_tar_bz2(archive: &Path, dst: &Path) -> Result<()> {
         if let Some(parent) = out.parent() {
             std::fs::create_dir_all(parent).ok();
         }
-        let mut f = std::fs::File::create(&out)
-            .with_context(|| format!("create {}", out.display()))?;
+        let mut f =
+            std::fs::File::create(&out).with_context(|| format!("create {}", out.display()))?;
         let mut buf = [0u8; 64 * 1024];
         loop {
             let n = entry.read(&mut buf)?;

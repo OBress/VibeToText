@@ -49,9 +49,15 @@ impl AudioCapture {
         let stop_t = stop.clone();
 
         let thread = std::thread::spawn(move || {
-            if let Err(e) =
-                run_stream(device, config, channels, sample_rate, frame_tx, level_tx, stop_t)
-            {
+            if let Err(e) = run_stream(
+                device,
+                config,
+                channels,
+                sample_rate,
+                frame_tx,
+                level_tx,
+                stop_t,
+            ) {
                 log::error!("audio capture error: {e:#}");
             }
         });
@@ -95,8 +101,14 @@ fn run_stream(
             &stream_config,
             move |data: &[f32], _| {
                 handle(
-                    data, channels, sample_rate, target_rate,
-                    &mut buf, &frame_tx_cb, &level_tx_cb, &stop_cb,
+                    data,
+                    channels,
+                    sample_rate,
+                    target_rate,
+                    &mut buf,
+                    &frame_tx_cb,
+                    &level_tx_cb,
+                    &stop_cb,
                 )
             },
             err_fn,
@@ -107,8 +119,14 @@ fn run_stream(
             move |data: &[i16], _| {
                 let f: Vec<f32> = data.iter().map(|&s| s as f32 / i16::MAX as f32).collect();
                 handle(
-                    &f, channels, sample_rate, target_rate,
-                    &mut buf, &frame_tx_cb, &level_tx_cb, &stop_cb,
+                    &f,
+                    channels,
+                    sample_rate,
+                    target_rate,
+                    &mut buf,
+                    &frame_tx_cb,
+                    &level_tx_cb,
+                    &stop_cb,
                 )
             },
             err_fn,
@@ -122,8 +140,14 @@ fn run_stream(
                     .map(|&s| (s as f32 - 32_768.0) / 32_768.0)
                     .collect();
                 handle(
-                    &f, channels, sample_rate, target_rate,
-                    &mut buf, &frame_tx_cb, &level_tx_cb, &stop_cb,
+                    &f,
+                    channels,
+                    sample_rate,
+                    target_rate,
+                    &mut buf,
+                    &frame_tx_cb,
+                    &level_tx_cb,
+                    &stop_cb,
                 )
             },
             err_fn,

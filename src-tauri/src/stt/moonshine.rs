@@ -34,8 +34,7 @@ use crate::vad;
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use sherpa_onnx::{
-    OfflineModelConfig, OfflineMoonshineModelConfig, OfflineRecognizer,
-    OfflineRecognizerConfig,
+    OfflineModelConfig, OfflineMoonshineModelConfig, OfflineRecognizer, OfflineRecognizerConfig,
 };
 use std::path::{Path, PathBuf};
 use std::sync::{
@@ -213,9 +212,7 @@ impl SttBackend for MoonshineBackend {
                 Some(f) => {
                     if buf.len() + f.0.len() > max_samples {
                         if !warned_overflow {
-                            log::warn!(
-                                "Moonshine: audio exceeds {MAX_SECONDS}s cap; truncating"
-                            );
+                            log::warn!("Moonshine: audio exceeds {MAX_SECONDS}s cap; truncating");
                             warned_overflow = true;
                         }
                         let take = max_samples.saturating_sub(buf.len());

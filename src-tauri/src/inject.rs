@@ -1,5 +1,5 @@
 use anyhow::Result;
-use enigo::{Enigo, Key, Keyboard, Settings, Direction};
+use enigo::{Direction, Enigo, Key, Keyboard, Settings};
 use tauri::AppHandle;
 use tauri_plugin_clipboard_manager::ClipboardExt;
 
@@ -132,9 +132,7 @@ pub fn paste_text(app: &AppHandle, s: &str) -> Result<()> {
             }
         }
     } else {
-        log::debug!(
-            "paste_text: no previous clipboard text to restore (was image / file / empty)"
-        );
+        log::debug!("paste_text: no previous clipboard text to restore (was image / file / empty)");
     }
     Ok(())
 }

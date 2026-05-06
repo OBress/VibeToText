@@ -119,7 +119,10 @@ impl DictationSession {
         let backend_run = backend.clone();
 
         let handle = tokio::spawn(async move {
-            if let Err(e) = backend_run.run(app_run, cfg_run, audio_run, cancel_run).await {
+            if let Err(e) = backend_run
+                .run(app_run, cfg_run, audio_run, cancel_run)
+                .await
+            {
                 log::error!("STT backend error: {e:#}");
             }
         });
@@ -139,11 +142,7 @@ impl DictationSession {
                     latest = Some(l.0);
                 }
                 if let Some(rms) = latest {
-                    let _ = app_levels.emit_to(
-                        "overlay",
-                        "audio-level",
-                        rms,
-                    );
+                    let _ = app_levels.emit_to("overlay", "audio-level", rms);
                 }
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
@@ -206,8 +205,8 @@ enum BackendKind {
 }
 
 fn pick_backend_kind(cfg: &AppConfig) -> Result<BackendKind> {
-    let choice = whisper::resolve_runtime(cfg)
-        .map_err(|e| anyhow!("failed to resolve runtime: {e:#}"))?;
+    let choice =
+        whisper::resolve_runtime(cfg).map_err(|e| anyhow!("failed to resolve runtime: {e:#}"))?;
     use ct2rs::sys::Device;
     // GPU mode always means Whisper (Moonshine has no CUDA path).
     // CPU mode honors `cpu_engine`; default is Moonshine. The Device

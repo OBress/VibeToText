@@ -86,14 +86,15 @@ jobs:
           # is a no-op or a quick upgrade. Listed for clarity.
           brew list cmake >/dev/null 2>&1 || brew install cmake
 
-      - name: Install Windows build deps
+      - name: Verify Windows build deps
         if: runner.os == 'Windows'
-        run: |
-          # Visual Studio 2022 (incl. msvc + Windows SDK) and CMake
-          # are preinstalled on `windows-latest`. Sanity-check + log
-          # the installed versions so build failures are diagnosable.
-          cmake --version
-          cl.exe 2>&1 | Select-String "Microsoft" | Select-Object -First 1
+        # MSVC + Windows SDK are preinstalled on `windows-latest`; the
+        # Tauri build picks them up via vcvars when cargo invokes the
+        # linker. We don't try to call `cl.exe` directly here because
+        # it isn't on PATH outside an MSVC dev shell — that just
+        # produces a confusing failure. CMake comes pre-installed, so
+        # we sanity-check that one only.
+        run: cmake --version
         shell: pwsh
 
       - uses: dtolnay/rust-toolchain@stable

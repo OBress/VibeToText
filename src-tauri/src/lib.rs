@@ -23,16 +23,14 @@ mod modifier_hook;
 mod stt;
 mod vad;
 
+use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::Arc;
 use tauri::{
     menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Emitter, Manager,
 };
-use tauri_plugin_global_shortcut::{
-    Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState,
-};
-use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
+use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 use tokio::sync::Mutex;
 
 use config::AppConfig;
@@ -293,9 +291,7 @@ async fn download_whisper_model(
 /// punctuation-insensitive (Moonshine emits lower-case un-punctuated
 /// transcripts; the ground truth is upper-case).
 #[tauri::command]
-async fn run_moonshine_self_test(
-    app: tauri::AppHandle,
-) -> Result<Vec<serde_json::Value>, String> {
+async fn run_moonshine_self_test(app: tauri::AppHandle) -> Result<Vec<serde_json::Value>, String> {
     use std::collections::HashMap;
     use std::fs::File;
     use std::io::{BufRead, BufReader};
@@ -318,8 +314,7 @@ async fn run_moonshine_self_test(
 
     // Parse trans.txt. Lines look like: `0.wav SOME UPPER CASE TEXT`.
     let trans_path = test_dir.join("trans.txt");
-    let f = File::open(&trans_path)
-        .map_err(|e| format!("open {}: {e}", trans_path.display()))?;
+    let f = File::open(&trans_path).map_err(|e| format!("open {}: {e}", trans_path.display()))?;
     let mut expected: HashMap<String, String> = HashMap::new();
     for line in BufReader::new(f).lines().map_while(|l| l.ok()) {
         if let Some((file, text)) = line.split_once(' ') {
@@ -392,10 +387,12 @@ fn word_error_rate(reference: &str, hypothesis: &str) -> f32 {
     for i in 1..=n {
         cur[0] = i;
         for j in 1..=m {
-            let cost = if r_words[i - 1] == h_words[j - 1] { 0 } else { 1 };
-            cur[j] = (prev[j] + 1)
-                .min(cur[j - 1] + 1)
-                .min(prev[j - 1] + cost);
+            let cost = if r_words[i - 1] == h_words[j - 1] {
+                0
+            } else {
+                1
+            };
+            cur[j] = (prev[j] + 1).min(cur[j - 1] + 1).min(prev[j - 1] + cost);
         }
         std::mem::swap(&mut prev, &mut cur);
     }
@@ -555,10 +552,7 @@ fn register_hotkeys(app: &tauri::AppHandle, cfg: &AppConfig) -> anyhow::Result<(
     // The "stt_toggle" entry is optional — empty string disables it
     // entirely (no hotkey for the master switch).
     let stt_toggle_str = cfg.stt_toggle_hotkey.trim();
-    let mut entries: Vec<(&str, &str)> = vec![
-        ("settings", toggle_str),
-        ("dictate", dictate_str),
-    ];
+    let mut entries: Vec<(&str, &str)> = vec![("settings", toggle_str), ("dictate", dictate_str)];
     if !stt_toggle_str.is_empty() {
         entries.push(("stt_toggle", stt_toggle_str));
     }
@@ -576,9 +570,7 @@ fn register_hotkeys(app: &tauri::AppHandle, cfg: &AppConfig) -> anyhow::Result<(
             if let Some(mask) = modifier_hook::mask_for_modifier_only(&canonical) {
                 if label == "dictate" {
                     modifier_hook::set_watch_mask(mask);
-                    log::info!(
-                        "{label} hotkey '{combo}' is modifier-only — using keyboard hook"
-                    );
+                    log::info!("{label} hotkey '{combo}' is modifier-only — using keyboard hook");
                     continue;
                 } else {
                     log::warn!(
@@ -607,7 +599,10 @@ fn register_hotkeys(app: &tauri::AppHandle, cfg: &AppConfig) -> anyhow::Result<(
                         log::warn!("{label} variant register failed: {e}");
                     }
                 }
-                log::info!("{label} hotkey registered: {combo} ({} variants)", variants.len());
+                log::info!(
+                    "{label} hotkey registered: {combo} ({} variants)",
+                    variants.len()
+                );
             }
             Err(e) => {
                 log::warn!("{label} hotkey '{combo}' parse failed: {e}");
@@ -761,23 +756,54 @@ fn code_canonical_name(c: Code) -> String {
         Code::ShiftLeft | Code::ShiftRight => "shift".into(),
         Code::AltLeft | Code::AltRight => "alt".into(),
         Code::MetaLeft | Code::MetaRight => "meta".into(),
-        Code::KeyA => "a".into(), Code::KeyB => "b".into(), Code::KeyC => "c".into(),
-        Code::KeyD => "d".into(), Code::KeyE => "e".into(), Code::KeyF => "f".into(),
-        Code::KeyG => "g".into(), Code::KeyH => "h".into(), Code::KeyI => "i".into(),
-        Code::KeyJ => "j".into(), Code::KeyK => "k".into(), Code::KeyL => "l".into(),
-        Code::KeyM => "m".into(), Code::KeyN => "n".into(), Code::KeyO => "o".into(),
-        Code::KeyP => "p".into(), Code::KeyQ => "q".into(), Code::KeyR => "r".into(),
-        Code::KeyS => "s".into(), Code::KeyT => "t".into(), Code::KeyU => "u".into(),
-        Code::KeyV => "v".into(), Code::KeyW => "w".into(), Code::KeyX => "x".into(),
-        Code::KeyY => "y".into(), Code::KeyZ => "z".into(),
-        Code::Digit0 => "0".into(), Code::Digit1 => "1".into(), Code::Digit2 => "2".into(),
-        Code::Digit3 => "3".into(), Code::Digit4 => "4".into(), Code::Digit5 => "5".into(),
-        Code::Digit6 => "6".into(), Code::Digit7 => "7".into(), Code::Digit8 => "8".into(),
+        Code::KeyA => "a".into(),
+        Code::KeyB => "b".into(),
+        Code::KeyC => "c".into(),
+        Code::KeyD => "d".into(),
+        Code::KeyE => "e".into(),
+        Code::KeyF => "f".into(),
+        Code::KeyG => "g".into(),
+        Code::KeyH => "h".into(),
+        Code::KeyI => "i".into(),
+        Code::KeyJ => "j".into(),
+        Code::KeyK => "k".into(),
+        Code::KeyL => "l".into(),
+        Code::KeyM => "m".into(),
+        Code::KeyN => "n".into(),
+        Code::KeyO => "o".into(),
+        Code::KeyP => "p".into(),
+        Code::KeyQ => "q".into(),
+        Code::KeyR => "r".into(),
+        Code::KeyS => "s".into(),
+        Code::KeyT => "t".into(),
+        Code::KeyU => "u".into(),
+        Code::KeyV => "v".into(),
+        Code::KeyW => "w".into(),
+        Code::KeyX => "x".into(),
+        Code::KeyY => "y".into(),
+        Code::KeyZ => "z".into(),
+        Code::Digit0 => "0".into(),
+        Code::Digit1 => "1".into(),
+        Code::Digit2 => "2".into(),
+        Code::Digit3 => "3".into(),
+        Code::Digit4 => "4".into(),
+        Code::Digit5 => "5".into(),
+        Code::Digit6 => "6".into(),
+        Code::Digit7 => "7".into(),
+        Code::Digit8 => "8".into(),
         Code::Digit9 => "9".into(),
-        Code::F1 => "f1".into(), Code::F2 => "f2".into(), Code::F3 => "f3".into(),
-        Code::F4 => "f4".into(), Code::F5 => "f5".into(), Code::F6 => "f6".into(),
-        Code::F7 => "f7".into(), Code::F8 => "f8".into(), Code::F9 => "f9".into(),
-        Code::F10 => "f10".into(), Code::F11 => "f11".into(), Code::F12 => "f12".into(),
+        Code::F1 => "f1".into(),
+        Code::F2 => "f2".into(),
+        Code::F3 => "f3".into(),
+        Code::F4 => "f4".into(),
+        Code::F5 => "f5".into(),
+        Code::F6 => "f6".into(),
+        Code::F7 => "f7".into(),
+        Code::F8 => "f8".into(),
+        Code::F9 => "f9".into(),
+        Code::F10 => "f10".into(),
+        Code::F11 => "f11".into(),
+        Code::F12 => "f12".into(),
         Code::Space => "space".into(),
         Code::Enter => "enter".into(),
         Code::Escape => "escape".into(),
@@ -830,9 +856,18 @@ fn code_from_str(s: &str) -> Option<Code> {
         "right" | "arrowright" => Code::ArrowRight,
 
         // Function keys
-        "f1" => Code::F1, "f2" => Code::F2, "f3" => Code::F3, "f4" => Code::F4,
-        "f5" => Code::F5, "f6" => Code::F6, "f7" => Code::F7, "f8" => Code::F8,
-        "f9" => Code::F9, "f10" => Code::F10, "f11" => Code::F11, "f12" => Code::F12,
+        "f1" => Code::F1,
+        "f2" => Code::F2,
+        "f3" => Code::F3,
+        "f4" => Code::F4,
+        "f5" => Code::F5,
+        "f6" => Code::F6,
+        "f7" => Code::F7,
+        "f8" => Code::F8,
+        "f9" => Code::F9,
+        "f10" => Code::F10,
+        "f11" => Code::F11,
+        "f12" => Code::F12,
 
         // Punctuation / symbols (US-layout names)
         "backtick" | "`" => Code::Backquote,
@@ -848,27 +883,50 @@ fn code_from_str(s: &str) -> Option<Code> {
         "/" | "slash" => Code::Slash,
 
         // Digits
-        c if c.len() == 1 && c.chars().next().unwrap().is_ascii_digit() => {
-            match c {
-                "0" => Code::Digit0, "1" => Code::Digit1, "2" => Code::Digit2,
-                "3" => Code::Digit3, "4" => Code::Digit4, "5" => Code::Digit5,
-                "6" => Code::Digit6, "7" => Code::Digit7, "8" => Code::Digit8,
-                "9" => Code::Digit9,
-                _ => return None,
-            }
-        }
+        c if c.len() == 1 && c.chars().next().unwrap().is_ascii_digit() => match c {
+            "0" => Code::Digit0,
+            "1" => Code::Digit1,
+            "2" => Code::Digit2,
+            "3" => Code::Digit3,
+            "4" => Code::Digit4,
+            "5" => Code::Digit5,
+            "6" => Code::Digit6,
+            "7" => Code::Digit7,
+            "8" => Code::Digit8,
+            "9" => Code::Digit9,
+            _ => return None,
+        },
 
         // Letters
         c if c.len() == 1 && c.chars().next().unwrap().is_ascii_alphabetic() => {
             let up = c.to_ascii_uppercase();
             match up.as_str() {
-                "A" => Code::KeyA, "B" => Code::KeyB, "C" => Code::KeyC, "D" => Code::KeyD,
-                "E" => Code::KeyE, "F" => Code::KeyF, "G" => Code::KeyG, "H" => Code::KeyH,
-                "I" => Code::KeyI, "J" => Code::KeyJ, "K" => Code::KeyK, "L" => Code::KeyL,
-                "M" => Code::KeyM, "N" => Code::KeyN, "O" => Code::KeyO, "P" => Code::KeyP,
-                "Q" => Code::KeyQ, "R" => Code::KeyR, "S" => Code::KeyS, "T" => Code::KeyT,
-                "U" => Code::KeyU, "V" => Code::KeyV, "W" => Code::KeyW, "X" => Code::KeyX,
-                "Y" => Code::KeyY, "Z" => Code::KeyZ,
+                "A" => Code::KeyA,
+                "B" => Code::KeyB,
+                "C" => Code::KeyC,
+                "D" => Code::KeyD,
+                "E" => Code::KeyE,
+                "F" => Code::KeyF,
+                "G" => Code::KeyG,
+                "H" => Code::KeyH,
+                "I" => Code::KeyI,
+                "J" => Code::KeyJ,
+                "K" => Code::KeyK,
+                "L" => Code::KeyL,
+                "M" => Code::KeyM,
+                "N" => Code::KeyN,
+                "O" => Code::KeyO,
+                "P" => Code::KeyP,
+                "Q" => Code::KeyQ,
+                "R" => Code::KeyR,
+                "S" => Code::KeyS,
+                "T" => Code::KeyT,
+                "U" => Code::KeyU,
+                "V" => Code::KeyV,
+                "W" => Code::KeyW,
+                "X" => Code::KeyX,
+                "Y" => Code::KeyY,
+                "Z" => Code::KeyZ,
                 _ => return None,
             }
         }
@@ -945,11 +1003,12 @@ pub fn run() {
 
                         let toggle_keys = canonical_combo_str(&cfg.toggle_settings_hotkey);
                         let dictate_keys = canonical_combo_str(&cfg.dictate_hotkey);
-                        let stt_toggle_keys =
-                            canonical_combo_str(&cfg.stt_toggle_hotkey);
+                        let stt_toggle_keys = canonical_combo_str(&cfg.stt_toggle_hotkey);
 
                         if !toggle_keys.is_empty() && fired_keys == toggle_keys {
-                            if !is_press { return; }
+                            if !is_press {
+                                return;
+                            }
                             // Settings hotkey: classic toggle on press.
                             if let Some(win) = app.get_webview_window("settings") {
                                 if win.is_visible().unwrap_or(false) {
@@ -969,10 +1028,10 @@ pub fn run() {
                             } else {
                                 let _ = stop_dictation(&app).await;
                             }
-                        } else if !stt_toggle_keys.is_empty()
-                            && fired_keys == stt_toggle_keys
-                        {
-                            if !is_press { return; }
+                        } else if !stt_toggle_keys.is_empty() && fired_keys == stt_toggle_keys {
+                            if !is_press {
+                                return;
+                            }
                             // STT master kill-switch: flip on press.
                             let _ = toggle_stt_enabled(&app).await;
                         }
@@ -1036,11 +1095,7 @@ pub fn run() {
                                 .iter()
                                 .filter(|r| r.get("ok").and_then(|b| b.as_bool()) == Some(true))
                                 .count();
-                            log::info!(
-                                "self-test summary: {}/{} passed",
-                                passed,
-                                rows.len()
-                            );
+                            log::info!("self-test summary: {}/{} passed", passed, rows.len());
                         }
                         Err(e) => log::warn!("self-test failed: {e}"),
                     }
@@ -1295,7 +1350,10 @@ pub(crate) async fn toggle_stt_enabled(app: &tauri::AppHandle) -> anyhow::Result
         let _ = config::save(app, &cfg);
         v
     };
-    log::info!("toggle_stt_enabled: STT is now {}", if new_value { "ON" } else { "OFF" });
+    log::info!(
+        "toggle_stt_enabled: STT is now {}",
+        if new_value { "ON" } else { "OFF" }
+    );
     let _ = app.emit("stt-enabled-changed", new_value);
     // If we're turning STT off, terminate any current session.
     if !new_value {
@@ -1372,11 +1430,9 @@ fn show_overlay(app: &tauri::AppHandle) {
         // Window logical size from tauri.conf.json. Convert from physical px.
         let win_w_logical = 460u32;
         let win_h_logical = 130u32;
-        let target_x_phys =
-            ((size.width as f64) - (win_w_logical as f64) * scale) / 2.0;
+        let target_x_phys = ((size.width as f64) - (win_w_logical as f64) * scale) / 2.0;
         // Anchor near the bottom of the screen, taskbar-aware-ish (60px gap).
-        let target_y_phys =
-            (size.height as f64) - (win_h_logical as f64) * scale - 80.0 * scale;
+        let target_y_phys = (size.height as f64) - (win_h_logical as f64) * scale - 80.0 * scale;
         let _ = win.set_position(tauri::PhysicalPosition::new(
             target_x_phys.max(0.0),
             target_y_phys.max(0.0),

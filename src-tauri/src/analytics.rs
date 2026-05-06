@@ -200,8 +200,7 @@ impl Analytics {
             .map(|u| local_dt(u.timestamp).date_naive())
             .collect();
         let days_active = unique_dates.len() as u32;
-        let (current_streak_days, longest_streak_days) =
-            compute_streaks(&unique_dates);
+        let (current_streak_days, longest_streak_days) = compute_streaks(&unique_dates);
 
         let first_used = self.utterances.first().map(|u| u.timestamp);
         let last_used = self.utterances.last().map(|u| u.timestamp);
@@ -288,7 +287,10 @@ impl Analytics {
 }
 
 fn local_dt(ts: i64) -> DateTime<Local> {
-    Local.timestamp_opt(ts, 0).single().unwrap_or_else(|| Local::now())
+    Local
+        .timestamp_opt(ts, 0)
+        .single()
+        .unwrap_or_else(|| Local::now())
 }
 
 fn build_last_7_days(utterances: &[Utterance]) -> Vec<DayBucket> {
@@ -362,9 +364,7 @@ fn compute_streaks(dates: &std::collections::BTreeSet<NaiveDate>) -> (u32, u32) 
     (current, longest)
 }
 
-fn vocab_stats(
-    utterances: &[Utterance],
-) -> (u32, Vec<WordCount>, f64, Option<String>, f64) {
+fn vocab_stats(utterances: &[Utterance]) -> (u32, Vec<WordCount>, f64, Option<String>, f64) {
     let stop = stopwords();
     let mut counts: HashMap<String, u32> = HashMap::new();
     let mut total_word_chars: u64 = 0;
@@ -424,14 +424,14 @@ fn stopwords() -> std::collections::HashSet<&'static str> {
         "is", "are", "was", "were", "be", "been", "being", "am", "do", "does", "did", "doing",
         "have", "has", "had", "having", "i", "you", "he", "she", "it", "we", "they", "me", "him",
         "her", "us", "them", "my", "your", "his", "their", "our", "this", "that", "these", "those",
-        "as", "if", "so", "not", "no", "yes", "from", "up", "down", "out", "over", "under",
-        "then", "than", "just", "very", "really", "kind", "sort", "like", "well", "okay", "ok",
-        "so", "now", "also", "yeah", "yep", "hmm", "uh", "um", "er", "ah", "oh", "what", "when",
-        "where", "who", "why", "how", "which", "would", "could", "should", "will", "shall", "can",
-        "may", "might", "must", "into", "about", "after", "before", "again", "any", "all", "some",
-        "more", "most", "other", "such", "only", "own", "same", "too", "s", "t", "d", "ll", "m",
-        "ve", "re", "isn't", "don't", "i'm", "it's", "that's", "you're", "we're", "they're",
-        "there", "here",
+        "as", "if", "so", "not", "no", "yes", "from", "up", "down", "out", "over", "under", "then",
+        "than", "just", "very", "really", "kind", "sort", "like", "well", "okay", "ok", "so",
+        "now", "also", "yeah", "yep", "hmm", "uh", "um", "er", "ah", "oh", "what", "when", "where",
+        "who", "why", "how", "which", "would", "could", "should", "will", "shall", "can", "may",
+        "might", "must", "into", "about", "after", "before", "again", "any", "all", "some", "more",
+        "most", "other", "such", "only", "own", "same", "too", "s", "t", "d", "ll", "m", "ve",
+        "re", "isn't", "don't", "i'm", "it's", "that's", "you're", "we're", "they're", "there",
+        "here",
     ]
     .into_iter()
     .collect()
@@ -487,7 +487,10 @@ fn build_insights(
     }
 
     if let Some(d) = peak_weekday {
-        out.push(format!("Your most productive day of the week is {}.", weekday_name(d)));
+        out.push(format!(
+            "Your most productive day of the week is {}.",
+            weekday_name(d)
+        ));
     }
 
     if current_streak >= 2 {
@@ -496,7 +499,10 @@ fn build_insights(
             current_streak
         ));
     } else if days_active >= 1 {
-        out.push(format!("You've used VibeToText on {} unique day(s).", days_active));
+        out.push(format!(
+            "You've used VibeToText on {} unique day(s).",
+            days_active
+        ));
     }
 
     if avg_session_seconds > 0.0 {
@@ -631,12 +637,7 @@ pub fn save(app: &AppHandle, a: &Analytics) -> Result<()> {
 /// Convenience: record from an STT backend. Loads the AppState, mutates
 /// the in-memory analytics, and persists. Errors are logged but don't
 /// surface — analytics shouldn't break dictation.
-pub async fn record_from_backend(
-    app: &AppHandle,
-    text: &str,
-    duration: Duration,
-    backend: &str,
-) {
+pub async fn record_from_backend(app: &AppHandle, text: &str, duration: Duration, backend: &str) {
     if text.trim().is_empty() {
         return;
     }

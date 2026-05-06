@@ -164,7 +164,8 @@ mod tests {
         // 440 Hz sine — clearly above the speech threshold.
         (0..n)
             .map(|i| {
-                amplitude * (2.0 * std::f32::consts::PI * 440.0 * i as f32 / SAMPLE_RATE as f32).sin()
+                amplitude
+                    * (2.0 * std::f32::consts::PI * 440.0 * i as f32 / SAMPLE_RATE as f32).sin()
             })
             .collect()
     }
@@ -179,8 +180,11 @@ mod tests {
         let trimmed_secs = trimmed.len() as f32 / SAMPLE_RATE as f32;
         // We should get back ~1 s of tone plus the edge padding,
         // not the original 3.5 s.
-        assert!(trimmed_secs > 0.8 && trimmed_secs < 1.5,
-                "expected ~1s after trim, got {:.2}s", trimmed_secs);
+        assert!(
+            trimmed_secs > 0.8 && trimmed_secs < 1.5,
+            "expected ~1s after trim, got {:.2}s",
+            trimmed_secs
+        );
     }
 
     #[test]

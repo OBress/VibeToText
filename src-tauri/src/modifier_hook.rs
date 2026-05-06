@@ -36,12 +36,12 @@ use tauri::AppHandle;
 use windows_sys::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    GetAsyncKeyState, VK_CONTROL, VK_LCONTROL, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_MENU,
-    VK_RCONTROL, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_SHIFT,
+    GetAsyncKeyState, VK_CONTROL, VK_LCONTROL, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_MENU, VK_RCONTROL,
+    VK_RMENU, VK_RSHIFT, VK_RWIN, VK_SHIFT,
 };
 use windows_sys::Win32::UI::Input::{
-    GetRawInputData, RegisterRawInputDevices, HRAWINPUT, RAWINPUT, RAWINPUTDEVICE,
-    RAWINPUTHEADER, RID_INPUT, RIDEV_INPUTSINK, RIM_TYPEKEYBOARD,
+    GetRawInputData, RegisterRawInputDevices, HRAWINPUT, RAWINPUT, RAWINPUTDEVICE, RAWINPUTHEADER,
+    RIDEV_INPUTSINK, RID_INPUT, RIM_TYPEKEYBOARD,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, RegisterClassExW,
@@ -243,11 +243,7 @@ pub fn install(app: AppHandle) {
             dwFlags: RIDEV_INPUTSINK,
             hwndTarget: hwnd,
         };
-        let ok = RegisterRawInputDevices(
-            &rid,
-            1,
-            std::mem::size_of::<RAWINPUTDEVICE>() as u32,
-        );
+        let ok = RegisterRawInputDevices(&rid, 1, std::mem::size_of::<RAWINPUTDEVICE>() as u32);
         if ok == 0 {
             log::error!("modifier_hook: RegisterRawInputDevices failed");
             return;
