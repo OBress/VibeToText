@@ -269,6 +269,188 @@ async fn download_whisper_model(
 // separate CLI/runtime archive. The model itself is the only
 // downloaded artifact, handled by `download_whisper_model`.)
 
+/// Self-test the Moonshine backend by running it against the .wav
+/// fixtures shipped inside k2-fsa's model archive (`test_wavs/0.wav`,
+/// `1.wav`, `8k.wav`) and comparing each transcript against the
+/// ground-truth strings in `trans.txt`. Returns one entry per fixture:
+/// `{ file, expected, actual, ok }`.
+///
+/// Lives behind an IPC so we can drive it from the Dashboard without
+/// needing real microphone input. Match comparison is case- and
+/// punctuation-insensitive (Moonshine emits lower-case un-punctuated
+/// transcripts; the ground truth is upper-case).
+#[tauri::command]
+async fn run_moonshine_self_test(
+    app: tauri::AppHandle,
+) -> Result<Vec<serde_json::Value>, String> {
+    use std::collections::HashMap;
+    use std::fs::File;
+    use std::io::{BufRead, BufReader};
+
+    let dir = models::moonshine_dir(&app).map_err(|e| e.to_string())?;
+    let test_dir = dir.join("test_wavs");
+    if !test_dir.is_dir() {
+        return Err(format!(
+            "Moonshine test_wavs not found at {} — download the model first",
+            test_dir.display()
+        ));
+    }
+
+    // Force a Moonshine load even if config currently picks Whisper —
+    // we don't want the test to silently no-op when the user is in
+    // GPU mode. We bypass select_backend's caching here on purpose.
+    let backend = stt::MoonshineBackend::new(dir.clone())
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // Parse trans.txt. Lines look like: `0.wav SOME UPPER CASE TEXT`.
+    let trans_path = test_dir.join("trans.txt");
+    let f = File::open(&trans_path)
+        .map_err(|e| format!("open {}: {e}", trans_path.display()))?;
+    let mut expected: HashMap<String, String> = HashMap::new();
+    for line in BufReader::new(f).lines().map_while(|l| l.ok()) {
+        if let Some((file, text)) = line.split_once(' ') {
+            expected.insert(file.to_string(), text.trim().to_string());
+        }
+    }
+
+    // Decode each .wav as f32 16 kHz mono and run the recognizer.
+    let mut results: Vec<serde_json::Value> = Vec::new();
+    for fname in ["0.wav", "1.wav", "8k.wav"] {
+        let wav_path = test_dir.join(fname);
+        if !wav_path.is_file() {
+            continue;
+        }
+        let samples = decode_wav_to_f32(&wav_path).map_err(|e| e.to_string())?;
+        let n_audio_samples = samples.len();
+        let audio_seconds = n_audio_samples as f32 / 16_000.0;
+        let started = std::time::Instant::now();
+        let actual = backend
+            .transcribe_samples(samples)
+            .await
+            .map_err(|e| e.to_string())?;
+        let elapsed = started.elapsed();
+
+        let exp = expected.get(fname).cloned().unwrap_or_default();
+        let wer = word_error_rate(&exp, &actual);
+        // Pass at WER ≤ 10 % — the bundled fixtures contain proper
+        // nouns ("Prynne") and archaic spellings ("for ever") where
+        // a small mismatch is expected even from a perfect model.
+        // 10 % is the "this clearly transcribed real English"
+        // threshold, not a strict accuracy claim.
+        let ok = wer <= 0.10;
+        results.push(serde_json::json!({
+            "file": fname,
+            "expected": exp,
+            "actual": actual.trim(),
+            "ok": ok,
+            "wer": wer,
+            "elapsed_ms": elapsed.as_millis() as u64,
+            "rtfx": (audio_seconds / elapsed.as_secs_f32().max(0.001)),
+        }));
+        log::info!(
+            "Moonshine self-test {fname}: ok={ok} wer={:.3} elapsed={:?} rtfx={:.1}× actual={:?}",
+            wer,
+            elapsed,
+            audio_seconds / elapsed.as_secs_f32().max(0.001),
+            actual.trim()
+        );
+    }
+    Ok(results)
+}
+
+/// Standard ASR word error rate over a Levenshtein-on-words distance.
+/// Returns a fraction (0.0 = perfect, 1.0 = every word wrong).
+/// Comparison is case-insensitive and punctuation-insensitive.
+fn word_error_rate(reference: &str, hypothesis: &str) -> f32 {
+    let r = canonicalize(reference);
+    let h = canonicalize(hypothesis);
+    let r_words: Vec<&str> = r.split_whitespace().collect();
+    let h_words: Vec<&str> = h.split_whitespace().collect();
+    if r_words.is_empty() {
+        return if h_words.is_empty() { 0.0 } else { 1.0 };
+    }
+    let n = r_words.len();
+    let m = h_words.len();
+    // Classic DP edit distance over word tokens. O(n*m) memory, fine
+    // for our short fixtures.
+    let mut prev: Vec<usize> = (0..=m).collect();
+    let mut cur: Vec<usize> = vec![0; m + 1];
+    for i in 1..=n {
+        cur[0] = i;
+        for j in 1..=m {
+            let cost = if r_words[i - 1] == h_words[j - 1] { 0 } else { 1 };
+            cur[j] = (prev[j] + 1)
+                .min(cur[j - 1] + 1)
+                .min(prev[j - 1] + cost);
+        }
+        std::mem::swap(&mut prev, &mut cur);
+    }
+    prev[m] as f32 / n as f32
+}
+
+/// Decode a 16-bit (or 32-bit float) PCM WAV to mono 16 kHz f32 in
+/// [-1, 1]. We trust Moonshine's bundled fixtures to be 16 kHz mono;
+/// the 8k.wav is 8 kHz mono and we naive-upsample by 2× linear
+/// interpolation so the recognizer's 16 kHz expectation is met.
+fn decode_wav_to_f32(path: &std::path::Path) -> anyhow::Result<Vec<f32>> {
+    let mut reader = hound::WavReader::open(path)
+        .map_err(|e| anyhow::anyhow!("open wav {}: {e}", path.display()))?;
+    let spec = reader.spec();
+    let channels = spec.channels as usize;
+    let samples: Vec<f32> = match spec.sample_format {
+        hound::SampleFormat::Int => {
+            let max = (1i64 << (spec.bits_per_sample - 1)) as f32;
+            reader
+                .samples::<i32>()
+                .filter_map(Result::ok)
+                .map(|s| s as f32 / max)
+                .collect()
+        }
+        hound::SampleFormat::Float => reader.samples::<f32>().filter_map(Result::ok).collect(),
+    };
+    let mono: Vec<f32> = if channels > 1 {
+        samples
+            .chunks(channels)
+            .map(|c| c.iter().sum::<f32>() / channels as f32)
+            .collect()
+    } else {
+        samples
+    };
+    let resampled = if spec.sample_rate == 16_000 {
+        mono
+    } else if spec.sample_rate == 8_000 {
+        // Linear 2× up-sample: between every pair of samples insert
+        // their midpoint. Good enough for the self-test fixture.
+        let mut out = Vec::with_capacity(mono.len() * 2);
+        for w in mono.windows(2) {
+            out.push(w[0]);
+            out.push((w[0] + w[1]) * 0.5);
+        }
+        if let Some(last) = mono.last() {
+            out.push(*last);
+        }
+        out
+    } else {
+        return Err(anyhow::anyhow!(
+            "self-test wav has unsupported sample rate {}",
+            spec.sample_rate
+        ));
+    };
+    Ok(resampled)
+}
+
+/// Lower-case + strip non-alphanumerics for transcript comparison.
+fn canonicalize(s: &str) -> String {
+    s.chars()
+        .filter(|c| c.is_alphanumeric() || c.is_whitespace())
+        .flat_map(|c| c.to_lowercase())
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 #[tauri::command]
 async fn get_analytics(
     state: tauri::State<'_, Arc<AppState>>,
@@ -816,6 +998,42 @@ pub fn run() {
                 stt::warm_whisper(app_for_warm, cfg_for_warm).await;
             });
 
+            // Self-test escape hatch: when `VIBE_TO_TEXT_SELF_TEST=1`
+            // is set in the environment, run the bundled-wav self-
+            // test once at startup and log the result. Used by the
+            // automated verification in CI / dev to confirm that the
+            // Moonshine pipeline (download → extract → load →
+            // recognize) is wired correctly without needing a human
+            // to press the dictate hotkey. NO-OP otherwise — adds
+            // zero cost for normal users.
+            if std::env::var("VIBE_TO_TEXT_SELF_TEST").as_deref() == Ok("1") {
+                let app_for_test = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    // Brief delay so the warm-up gets a head start;
+                    // running a parallel Moonshine load fights for
+                    // CPU and just makes both slower.
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    log::info!("VIBE_TO_TEXT_SELF_TEST=1: running Moonshine self-test…");
+                    match run_moonshine_self_test(app_for_test).await {
+                        Ok(rows) => {
+                            for row in &rows {
+                                log::info!("self-test: {row}");
+                            }
+                            let passed = rows
+                                .iter()
+                                .filter(|r| r.get("ok").and_then(|b| b.as_bool()) == Some(true))
+                                .count();
+                            log::info!(
+                                "self-test summary: {}/{} passed",
+                                passed,
+                                rows.len()
+                            );
+                        }
+                        Err(e) => log::warn!("self-test failed: {e}"),
+                    }
+                });
+            }
+
             // Register hotkeys.
             register_hotkeys(app.handle(), &cfg)?;
 
@@ -890,6 +1108,7 @@ pub fn run() {
             current_backend,
             whisper_model_present,
             download_whisper_model,
+            run_moonshine_self_test,
             get_analytics,
             reset_analytics,
             pause_hotkeys,

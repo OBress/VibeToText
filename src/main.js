@@ -940,6 +940,53 @@ async function resetAnalytics() {
 document.getElementById("download_whisper").addEventListener("click", downloadWhisper);
 document.getElementById("reset_analytics").addEventListener("click", resetAnalytics);
 
+// Moonshine self-test: forces a model load + 3 transcription
+// passes against the .wav fixtures bundled in the model archive.
+// Useful for verifying the CPU path without needing a microphone.
+async function runSelfTest() {
+  const btn = document.getElementById("run_self_test");
+  const panel = document.getElementById("self_test_results_panel");
+  const summary = document.getElementById("self_test_summary");
+  const rows = document.getElementById("self_test_rows");
+  if (!btn || !panel || !rows) return;
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "Running… (downloads model on first use)";
+  panel.style.display = "";
+  rows.innerHTML = "";
+  summary.textContent = "running";
+  try {
+    const results = await invoke("run_moonshine_self_test");
+    const passed = results.filter((r) => r.ok).length;
+    summary.textContent = `${passed}/${results.length} passed`;
+    rows.innerHTML = results
+      .map((r) => {
+        const wer = (r.wer * 100).toFixed(1);
+        const rtfx = (r.rtfx ?? 0).toFixed(1);
+        const status = r.ok ? "✅ pass" : "⚠️ borderline";
+        return `
+        <div class="recent-row">
+          <div class="recent-row-meta">
+            <strong>${r.file}</strong> · ${r.elapsed_ms} ms · ${rtfx}× RTFx · WER ${wer}% · ${status}
+          </div>
+          <div class="recent-row-text"><span class="muted small">expected:</span> ${escapeHtml(r.expected)}</div>
+          <div class="recent-row-text"><span class="muted small">actual:</span> ${escapeHtml(r.actual)}</div>
+        </div>`;
+      })
+      .join("");
+  } catch (e) {
+    summary.textContent = "failed";
+    rows.innerHTML = `<div class="recent-row"><div class="recent-row-text">${escapeHtml(String(e))}</div></div>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = original;
+  }
+}
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+document.getElementById("run_self_test")?.addEventListener("click", runSelfTest);
+
 // Wire the X buttons on the soft (prefix-collision) warnings so the
 // user can dismiss them. Both warnings reflect the same per-pair state,
 // so dismissing either hides both.

@@ -139,6 +139,30 @@ impl MoonshineBackend {
             }),
         })
     }
+
+    /// Run the recognizer over an in-memory PCM-f32 16 kHz buffer
+    /// and return the raw transcript. No VAD trim, no analytics, no
+    /// paste — used by the self-test IPC and any future "transcribe
+    /// a file" feature. Heavy work runs on the blocking pool to
+    /// keep Tokio responsive.
+    pub async fn transcribe_samples(&self, samples: Vec<f32>) -> Result<String> {
+        let inner = self.inner.clone();
+        tokio::task::spawn_blocking(move || -> Result<String> {
+            let _g = inner
+                .inflight
+                .lock()
+                .map_err(|_| anyhow!("Moonshine inflight mutex poisoned"))?;
+            let stream = inner.recognizer.create_stream();
+            stream.accept_waveform(SAMPLE_RATE_I32, &samples);
+            inner.recognizer.decode(&stream);
+            let result = stream
+                .get_result()
+                .ok_or_else(|| anyhow!("Moonshine returned no result"))?;
+            Ok(result.text)
+        })
+        .await
+        .map_err(|e| anyhow!("Moonshine transcribe task: {e}"))?
+    }
 }
 
 /// Same heuristic as the Whisper backend: physical-core
