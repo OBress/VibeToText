@@ -177,9 +177,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
-          key: ${{ matrix.target }}-release
-          # Cache the C++ build outputs too (target/release/build/) since
-          # those are the slow ones to recreate.
+          # Bump the suffix to invalidate the cache after a Cargo.toml
+          # feature change. rust-cache keys on Cargo.lock, but features
+          # don't change Cargo.lock — so a static→shared sherpa-onnx
+          # switch leaves stale extracted archives in the cached target
+          # dir and rust-lld can't find the new .so files.
+          key: ${{ matrix.target }}-release-v2
           cache-targets: true
           cache-on-failure: true
 
@@ -189,6 +192,25 @@ jobs:
 
       - name: Install npm dependencies
         run: npm ci
+
+      # The Swatinem/rust-cache action restores `target/` including
+      # `target/sherpa-onnx-prebuilt/`, which is where sherpa-onnx-sys
+      # extracts the platform archive on first build. Stale entries
+      # from a different feature-set (e.g. previous `static` builds)
+      # can confuse the linker — clear it before each release build
+      # so the build script always pulls a fresh archive matching the
+      # active feature flags. Cheap (one network roundtrip + 30-second
+      # extract) and saves us from "library not found" surprises.
+      - name: Clear sherpa-onnx prebuilt cache
+        shell: bash
+        run: |
+          # Wipe the extracted prebuilt + the build-script's stamped
+          # "I already ran" markers so cargo re-runs sherpa-onnx-sys's
+          # build.rs and re-extracts the archive matching the active
+          # feature flags.
+          rm -rf src-tauri/target/sherpa-onnx-prebuilt || true
+          rm -rf src-tauri/target/${{ matrix.target }}/release/build/sherpa-onnx-sys-* || true
+          rm -rf src-tauri/target/release/build/sherpa-onnx-sys-* || true
 
       - name: Build app (release)
         env:
