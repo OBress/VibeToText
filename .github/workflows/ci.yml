@@ -35,6 +35,18 @@ jobs:
             libasound2-dev \
             cmake
 
+      # ct2rs's build script panics without CUDA headers because we
+      # have the `cuda` feature enabled for Linux. Even `cargo check`
+      # runs the build script. Install the toolkit (cached after the
+      # first run, so this only costs ~30 s on warm cache).
+      - name: Install CUDA Toolkit
+        uses: Jimver/cuda-toolkit@v0.2.19
+        with:
+          cuda: "12.5.0"
+          method: "network"
+          sub-packages: '["nvcc", "cudart", "cublas", "cublas_dev", "cuda_runtime"]'
+          non-cuda-sub-packages: '[]'
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt,clippy

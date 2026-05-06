@@ -85,16 +85,30 @@ jobs:
       # CUDA kernel code). The runner doesn't ship CUDA, so we
       # install the toolkit here. The resulting binary still works
       # on machines without an NVIDIA GPU thanks to dynamic loading.
-      - name: Install CUDA Toolkit (Linux + Windows)
-        if: runner.os != 'macOS'
+      #
+      # `method: local` (Windows) downloads the full self-contained
+      # installer; `method: network` (Linux) streams sub-packages
+      # on demand. The network installer is flaky on GH-hosted
+      # Windows runners — it routinely crashes with
+      # `exit code 3772776473` mid-install — but local works
+      # reliably. Linux's local installer is huge (~4 GB), so we
+      # use network there for speed.
+      - name: Install CUDA Toolkit (Linux)
+        if: runner.os == 'Linux'
         uses: Jimver/cuda-toolkit@v0.2.19
         with:
           cuda: "12.5.0"
           method: "network"
-          # Trim the install to the subpackages CT2 actually needs —
-          # full CUDA is ~3 GB, this gets us under 1 GB.
           sub-packages: '["nvcc", "cudart", "cublas", "cublas_dev", "cuda_runtime"]'
           non-cuda-sub-packages: '[]'
+
+      - name: Install CUDA Toolkit (Windows)
+        if: runner.os == 'Windows'
+        uses: Jimver/cuda-toolkit@v0.2.19
+        with:
+          cuda: "12.5.0"
+          method: "local"
+          sub-packages: '["nvcc", "cudart", "cublas", "cublas_dev"]'
 
       # CT2's CMake config uses the deprecated FindCUDA module, which
       # mis-parses Windows paths containing backslash-P (it treats
@@ -158,14 +172,16 @@ jobs:
       - name: Collect bundle artifacts
         # The Tauri bundler drops its output into target/<triple>/release/bundle/<format>/.
         # Copy everything into a flat staging dir for the upload.
+        # Use `find` rather than bash globstar — macOS runners ship
+        # bash 3.x which doesn't support `shopt -s globstar`.
         shell: bash
         run: |
           set -e
           mkdir -p artifacts
-          shopt -s nullglob globstar
-          for f in src-tauri/target/${{ matrix.target }}/release/bundle/**/*.{msi,exe,dmg,AppImage,deb}; do
-            cp -v "$f" artifacts/
-          done
+          find "src-tauri/target/${{ matrix.target }}/release/bundle" -type f \
+            \( -name "*.msi" -o -name "*-setup.exe" -o -name "*.dmg" \
+               -o -name "*.AppImage" -o -name "*.deb" \) \
+            -exec cp -v {} artifacts/ \;
           ls -la artifacts/
 
       - uses: actions/upload-artifact@v4
