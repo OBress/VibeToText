@@ -44,7 +44,9 @@ jobs:
         with:
           cuda: "12.5.0"
           method: "network"
-          sub-packages: '["nvcc", "cudart", "cublas", "cublas_dev", "cuda_runtime"]'
+          # `toolkit` meta-package — see the comment in
+          # release.yml for why we don't pick individual sub-packages.
+          sub-packages: '["toolkit"]'
           non-cuda-sub-packages: '[]'
 
       - uses: dtolnay/rust-toolchain@stable

@@ -99,7 +99,16 @@ jobs:
         with:
           cuda: "12.5.0"
           method: "network"
-          sub-packages: '["nvcc", "cudart", "cublas", "cublas_dev", "cuda_runtime"]'
+          # `toolkit` is the meta-package that pulls in nvcc + cudart
+          # + cublas + their -dev headers. Larger (~2 GB unpacked)
+          # than picking individual sub-packages, but the per-
+          # subpackage names differ between Linux apt and Windows
+          # installer — the previous attempt failed because the
+          # Linux mapping turned `cublas_dev` into the non-existent
+          # `cuda-cublas_dev-12-5` (real name is `cuda-cublas-dev`)
+          # and `cuda_runtime` into a package that doesn't exist at
+          # all. `toolkit` sidesteps that name-mapping fragility.
+          sub-packages: '["toolkit"]'
           non-cuda-sub-packages: '[]'
 
       - name: Install CUDA Toolkit (Windows)
@@ -108,7 +117,9 @@ jobs:
         with:
           cuda: "12.5.0"
           method: "local"
-          sub-packages: '["nvcc", "cudart", "cublas", "cublas_dev"]'
+          # Same `toolkit` rationale as Linux: avoid the per-
+          # subpackage name fragility.
+          sub-packages: '["toolkit"]'
 
       # CT2's CMake config uses the deprecated FindCUDA module, which
       # mis-parses Windows paths containing backslash-P (it treats
