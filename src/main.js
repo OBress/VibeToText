@@ -30,6 +30,19 @@ const fields = [
 
 async function loadConfig() {
   const cfg = await invoke("get_config");
+  // Diagnostic: log the values we're about to populate the form with
+  // so we can spot "config got reset to defaults" issues without
+  // having to grep the config.json file. Visible in DevTools console.
+  console.log("loadConfig: settings loaded from backend", {
+    backendMode: cfg.backendMode,
+    cpuEngine: cfg.cpuEngine,
+    toggleSettingsHotkey: cfg.toggleSettingsHotkey,
+    dictateHotkey: cfg.dictateHotkey,
+    sttEnabled: cfg.sttEnabled,
+    whisperModelCpu: cfg.whisperModelCpu,
+    whisperModelGpu: cfg.whisperModelGpu,
+    trailingSpace: cfg.trailingSpace,
+  });
   for (const k of fields) {
     const el = document.getElementById(k);
     if (el) el.value = cfg[toCamel(k)] ?? "";
@@ -904,7 +917,18 @@ async function refreshAnalytics() {
   if (analyticsRefreshInFlight) return;
   analyticsRefreshInFlight = true;
   try {
-    const s = await invoke("get_analytics");
+    // Retry once if the very first call lands before Tauri's state
+    // is fully wired up (rare but possible during cold start). One
+    // retry with a small backoff has been enough in every case
+    // I've seen the dashboard stay blank.
+    let s;
+    try {
+      s = await invoke("get_analytics");
+    } catch (e1) {
+      console.warn("analytics fetch failed on first try, retrying:", e1);
+      await new Promise((r) => setTimeout(r, 300));
+      s = await invoke("get_analytics");
+    }
     renderHero(s);
     renderHourly(s.hourly);
     renderWeek(s.last7Days);
@@ -1011,6 +1035,13 @@ for (const id of ["hotkey_warn_settings", "hotkey_warn_dictate"]) {
     // Wire auto-save AFTER values are populated so the first save we
     // ever ship to disk reflects what the user sees, not blank inputs.
     wireAutoSave();
+    // Kick the dashboard render here too so analytics shows up on
+    // first paint without waiting for the user to switch tabs or
+    // press the dictate hotkey. The bottom-of-script call is a
+    // belt-and-braces backup in case this IIFE errors out before
+    // reaching `wireAutoSave`.
+    refreshAnalytics();
+    refreshWhisperStatus();
   }
 })();
 
