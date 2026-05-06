@@ -194,10 +194,16 @@ ct2rs = { version = "0.9", default-features = false, features = [
     "cuda-dynamic-loading",
     "cuda-small-binary",
 ] }
-# sherpa-onnx static — Linux ABI is generally stable across the
-# GCC versions ubuntu-latest CI uses. Single-file binary
-# distribution.
-sherpa-onnx = { version = "1.13", default-features = false, features = ["static"] }
+# sherpa-onnx `shared` — same protobuf-duplicate-symbol issue we
+# hit on Windows applies here. Both `sherpa-onnx-sys` (static) and
+# `sentencepiece-sys` (transitive dep through some path in our
+# tree) statically link their own copy of protobuf, and the linker
+# errors out with `duplicate symbol: google::protobuf::…`. Shared
+# linking sidesteps the collision: each .so has its own internal
+# protobuf, and our binary just calls into the public C API.
+# Cost: we ship a few .so files alongside the executable, picked up
+# by `bundle.resources` for the .deb / AppImage.
+sherpa-onnx = { version = "1.13", default-features = false, features = ["shared"] }
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]

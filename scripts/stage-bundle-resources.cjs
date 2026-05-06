@@ -27,55 +27,83 @@ const repoRoot = path.resolve(__dirname, "..");
 const tauriDir = path.join(repoRoot, "src-tauri");
 const stageDir = path.join(tauriDir, "bundle-resources");
 
-// On non-Windows platforms sherpa-onnx links statically — nothing
-// to do here. Still ensure the dir exists so Tauri's resources
-// glob doesn't complain.
+// Ensure the dir exists so Tauri's resources glob doesn't trip on
+// missing-dir validation.
 fs.mkdirSync(stageDir, { recursive: true });
-if (process.platform !== "win32") {
+
+// macOS uses `static` sherpa-onnx (clean ABI, single-file .app
+// bundle). Windows + Linux use `shared` because sherpa-onnx-sys's
+// prebuilt static libs ship their own copy of protobuf which
+// collides with sentencepiece-sys's protobuf at link time. On
+// shared builds, sherpa-onnx-sys's build script copies the runtime
+// libs into target/<profile>/; we re-stage them here so Tauri's
+// `bundle.resources` glob can pick them up alongside the executable
+// in the installer.
+if (process.platform === "darwin") {
   console.log(
-    `stage-bundle-resources: skipping on ${process.platform} (sherpa-onnx is static here).`
+    "stage-bundle-resources: skipping on darwin (sherpa-onnx is static here)."
   );
   process.exit(0);
 }
 
-// Pick the profile based on the BUILD_PROFILE env var that Tauri
-// passes to beforeBundleCommand, falling back to "release" since
-// that's what `tauri build` uses by default.
+// Tauri sets TAURI_ENV_DEBUG=true for `tauri dev` and false (or
+// unset) for `tauri build`. Match that to the cargo profile.
 const profile = process.env.TAURI_ENV_DEBUG === "true" ? "debug" : "release";
 const targetDir = path.join(tauriDir, "target", profile);
 
-// The full list sherpa-onnx-sys's build script emits when the
-// `shared` feature is on. Some files are optional depending on the
-// release archive contents (`onnxruntime_providers_shared.dll` is
-// only present when ONNX Runtime was built with provider plugins),
-// so we skip-with-a-warning for missing-but-optional files.
-const REQUIRED_DLLS = [
-  "sherpa-onnx-c-api.dll",
-  "sherpa-onnx-cxx-api.dll",
-  "onnxruntime.dll",
-];
-const OPTIONAL_DLLS = ["onnxruntime_providers_shared.dll"];
+// The list sherpa-onnx-sys's build script emits when the `shared`
+// feature is on. The actual file extension + naming differs per
+// platform: `.dll` on Windows, `.so` (with optional version
+// suffixes like `.so.1.13.0`) on Linux. We glob for sensible name
+// patterns rather than hard-code each file.
+const PLATFORM_PATTERNS = {
+  win32: [
+    /^sherpa-onnx.*\.dll$/i,
+    /^onnxruntime.*\.dll$/i,
+  ],
+  linux: [
+    /^libsherpa-onnx.*\.so(\.\d+)*$/,
+    /^libonnxruntime.*\.so(\.\d+)*$/,
+  ],
+};
 
+const patterns = PLATFORM_PATTERNS[process.platform];
+if (!patterns) {
+  console.log(
+    `stage-bundle-resources: no staging rules for ${process.platform}; skipping.`
+  );
+  process.exit(0);
+}
+
+if (!fs.existsSync(targetDir)) {
+  console.error(
+    `stage-bundle-resources: targetDir ${targetDir} doesn't exist.\n` +
+      `  Run \`cargo build --release\` first.`
+  );
+  process.exit(1);
+}
+
+const entries = fs.readdirSync(targetDir);
 let staged = 0;
-for (const name of REQUIRED_DLLS) {
+for (const name of entries) {
+  if (!patterns.some((re) => re.test(name))) continue;
   const src = path.join(targetDir, name);
-  if (!fs.existsSync(src)) {
-    console.error(
-      `stage-bundle-resources: required DLL missing at ${src}.\n` +
-        `  Run \`cargo build --release\` first, or check that the sherpa-onnx \`shared\` feature is enabled.`
-    );
-    process.exit(1);
-  }
+  // Skip if it's a directory that happens to match.
+  if (!fs.statSync(src).isFile()) continue;
   fs.copyFileSync(src, path.join(stageDir, name));
   staged += 1;
 }
-for (const name of OPTIONAL_DLLS) {
-  const src = path.join(targetDir, name);
-  if (fs.existsSync(src)) {
-    fs.copyFileSync(src, path.join(stageDir, name));
-    staged += 1;
-  }
+
+if (staged === 0) {
+  console.error(
+    `stage-bundle-resources: no matching shared libs found in ${targetDir}.\n` +
+      `  Expected sherpa-onnx + onnxruntime ${
+        process.platform === "win32" ? "DLLs" : ".so files"
+      }.\n` +
+      `  Confirm the sherpa-onnx \`shared\` feature is enabled.`
+  );
+  process.exit(1);
 }
 console.log(
-  `stage-bundle-resources: staged ${staged} DLL(s) from ${targetDir} → ${stageDir}`
+  `stage-bundle-resources: staged ${staged} shared lib(s) from ${targetDir} → ${stageDir}`
 );

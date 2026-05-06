@@ -59,7 +59,7 @@
       "icons/icon.ico"
     ],
     "resources": [
-      "bundle-resources/*"
+      "bundle-resources/**/*"
     ],
     "category": "Productivity",
     "shortDescription": "Local push-to-talk dictation",

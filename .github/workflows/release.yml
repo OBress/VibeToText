@@ -30,10 +30,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Windows — NSIS installer + MSI. The matrix uses `windows-latest`
-          # which is currently `windows-2022` (msvc 14.40+, perfectly fine
-          # for the sherpa-onnx `shared` build path we use here).
-          - os: windows-latest
+          # Windows — NSIS installer + MSI. Pinned to `windows-2022`
+          # (VS 2022) rather than `windows-latest`, which now aliases
+          # to `windows-2025-vs2026` and ships VS 2026. CUDA 11.8 is
+          # the most stable installer on GH-hosted runners (12.x
+          # network/local installers both crash with 0xE0E1A019),
+          # and 11.8's `host_config.h` rejects MSVC versions newer
+          # than VS 2022 with a hard `#error`. windows-2022 is
+          # supported by GH through ~2027.
+          - os: windows-2022
             target: x86_64-pc-windows-msvc
             bundles: nsis,msi
             artifact_name: vibe-to-text-windows-x64
