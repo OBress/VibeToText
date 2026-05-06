@@ -480,11 +480,13 @@ fn transcribe_one(
     //      truncating it. Padding with real silence smooths the
     //      transition and matches the training distribution.
     //
-    // 600 ms is well over both Whisper's 25 ms STFT window AND
-    // typical word-final phoneme tails (~150-300 ms), without
-    // pushing single-chunk utterances over the 30 s boundary unless
-    // the user was already near-cap.
-    const TRAILING_PAD_MS: usize = 600;
+    // 1500 ms gives the decoder a generous "speech is over" signal.
+    // Empirically, 600 ms wasn't enough — the user reported Whisper
+    // still cut off the final word. The longer silence run more
+    // closely matches what Whisper saw at training time (clean
+    // 30 s clips with mostly-silence tails) and gives the EOT-vs-
+    // continue decision a clearer margin.
+    const TRAILING_PAD_MS: usize = 1500;
     let pad_samples = (cfg.sampling_rate as usize) * TRAILING_PAD_MS / 1000;
     let mut padded: Vec<f32> = Vec::with_capacity(samples.len() + pad_samples);
     padded.extend_from_slice(samples);
@@ -549,15 +551,28 @@ fn transcribe_one(
     )?;
 
     // === Decoder options ===
-    // max_length=448 matches Whisper's default decoder context so a
-    // long dictation (~30 s / ~300 words) doesn't get cut off
-    // mid-sentence. We previously had this at 224 to bound the worst
-    // case during hallucination loops, but the real fix for those is
-    // repetition_penalty=1.2 + no_repeat_ngram_size=3 (both still set
-    // here), not the artificial output cap. With the cap at 224 the
-    // user noticed truncation on long speech.
+    // beam_size=5 matches OpenAI Whisper's reference default. With
+    // greedy decoding (beam_size=1) the user reported Whisper
+    // dropping the final word(s) of long sentences while Moonshine
+    // — which uses a fundamentally different sliding-window
+    // architecture — never had the issue. Greedy decoding commits
+    // to the highest-probability next token at every step, and
+    // when the EOT token edges out the continuation token by even
+    // a tiny margin Whisper just stops mid-sentence. Beam search
+    // explores multiple paths and the path that DOES finish the
+    // sentence ends up with a higher total log-prob, so the model
+    // commits to it. ~3-4× slower than greedy on the same
+    // hardware but on GPU + INT8_FLOAT16 we're still well under
+    // 1 s for a 10 s utterance.
+    //
+    // max_length=448 matches Whisper's default decoder context so
+    // a long dictation (~30 s / ~300 words) doesn't get cut off
+    // mid-sentence by the OUTPUT cap. We previously had this at
+    // 224 to bound hallucination loops, but the real fix for those
+    // is repetition_penalty=1.2 + no_repeat_ngram_size=3, not the
+    // artificial cap.
     let opts = WhisperOptions {
-        beam_size: 1,
+        beam_size: 5,
         repetition_penalty: 1.2,
         no_repeat_ngram_size: 3,
         max_length: 448,
