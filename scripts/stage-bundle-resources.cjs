@@ -49,7 +49,14 @@ if (process.platform === "darwin") {
 // Tauri sets TAURI_ENV_DEBUG=true for `tauri dev` and false (or
 // unset) for `tauri build`. Match that to the cargo profile.
 const profile = process.env.TAURI_ENV_DEBUG === "true" ? "debug" : "release";
-const targetDir = path.join(tauriDir, "target", profile);
+// When `tauri build --target <triple>` is invoked (which our CI
+// matrix does), cargo writes outputs to `target/<triple>/<profile>/`
+// rather than `target/<profile>/`. Tauri exposes the active triple
+// as TAURI_ENV_TARGET_TRIPLE.
+const triple = process.env.TAURI_ENV_TARGET_TRIPLE || "";
+const targetDir = triple
+  ? path.join(tauriDir, "target", triple, profile)
+  : path.join(tauriDir, "target", profile);
 
 // The list sherpa-onnx-sys's build script emits when the `shared`
 // feature is on. The actual file extension + naming differs per

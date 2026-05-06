@@ -191,6 +191,19 @@ jobs:
         run: npm ci
 
       - name: Build app (release)
+        env:
+          # CUDA 11.8's host_config.h hard-rejects MSVC toolset
+          # versions newer than ~17.5 (VS 2022's initial release).
+          # The windows-2022 runner ships with a much newer VS 2022
+          # update (17.10+ as of mid-2025) so the build fails with
+          # `unsupported Microsoft Visual Studio version`. The
+          # `-allow-unsupported-compiler` nvcc flag tells CUDA to
+          # skip the host-compiler version check; since we only use
+          # CUDA-dynamic-loading (the user's libcuda is what
+          # actually runs the kernels at execution time), the
+          # build-time compatibility with newer MSVC is fine in
+          # practice.
+          NVCC_PREPEND_FLAGS: ${{ runner.os == 'Windows' && '-allow-unsupported-compiler' || '' }}
         run: npm run tauri -- build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
 
       - name: Collect bundle artifacts
