@@ -91,29 +91,50 @@ pub fn paste_text(app: &AppHandle, s: &str) -> Result<()> {
     // read to complete BEFORE we overwrite. If we restore too early,
     // the target reads the BACKUP we just put back and pastes that
     // instead of the transcript — the exact "old clipboard content"
-    // bug. 500 ms is safely beyond every well-behaved app's keyboard
-    // → clipboard latency on a healthy machine.
+    // bug. 700 ms covers slow text editors + clipboard managers on
+    // every machine I've tested.
     //
-    // Belt-and-braces: re-read the clipboard right before restoring;
-    // if some other app changed it in the meantime (rare but real
-    // with clipboard managers), leave their value alone.
+    // We restore UNCONDITIONALLY: previous versions of this code
+    // re-read the clipboard before restoring and skipped restore if
+    // the contents had changed, on the theory that "some other app
+    // overwrote our paste, so respect their value." In practice this
+    // mis-fired on Windows machines with clipboard history (Win+V),
+    // password managers, and similar — those tools sometimes echo
+    // our paste back into the clipboard via their own hook, which
+    // looked like an unrelated change to our read and made us LEAVE
+    // the dictation as the active clipboard. Result: the user's
+    // pre-dictation clipboard got silently lost. Restoring without
+    // a guard is the right trade-off; if the user truly wanted the
+    // dictation in their clipboard they can copy it from the target
+    // editor.
     if let Some(prev) = backup {
-        std::thread::sleep(std::time::Duration::from_millis(500));
-        match cb.read_text() {
-            Ok(current) if current == target => {
-                let _ = cb.write_text(prev);
-                log::debug!("paste_text: clipboard restored to previous contents");
-            }
-            Ok(_other) => {
-                log::debug!(
-                    "paste_text: clipboard changed under us during paste — leaving it alone"
-                );
-            }
-            Err(_) => {
-                // Read failed — best-effort restore.
-                let _ = cb.write_text(prev);
+        std::thread::sleep(std::time::Duration::from_millis(700));
+        if let Err(e) = cb.write_text(prev.clone()) {
+            log::warn!("paste_text: clipboard restore write failed: {e}");
+        } else {
+            // Quick verify pass: read once to confirm we successfully
+            // overwrote the dictation. If something is fighting us,
+            // make one re-write attempt and accept whatever lands.
+            std::thread::sleep(std::time::Duration::from_millis(40));
+            match cb.read_text() {
+                Ok(current) if current == prev => {
+                    log::debug!("paste_text: clipboard restored to previous contents");
+                }
+                Ok(_other) => {
+                    log::debug!(
+                        "paste_text: restore landed but clipboard differs (manager hook?) — re-writing once"
+                    );
+                    let _ = cb.write_text(prev);
+                }
+                Err(e) => {
+                    log::debug!("paste_text: post-restore read failed: {e}");
+                }
             }
         }
+    } else {
+        log::debug!(
+            "paste_text: no previous clipboard text to restore (was image / file / empty)"
+        );
     }
     Ok(())
 }
