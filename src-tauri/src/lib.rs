@@ -593,7 +593,7 @@ fn register_hotkeys(app: &tauri::AppHandle, cfg: &AppConfig) -> anyhow::Result<(
             }
             Ok(variants) => {
                 for v in &variants {
-                    if let Err(e) = gs.register(v.clone()) {
+                    if let Err(e) = gs.register(*v) {
                         // Don't bail — duplicate or OS-rejected variants
                         // shouldn't prevent the rest from registering.
                         log::warn!("{label} variant register failed: {e}");

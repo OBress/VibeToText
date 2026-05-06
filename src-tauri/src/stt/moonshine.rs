@@ -110,18 +110,20 @@ impl MoonshineBackend {
 
         let threads = pick_thread_count();
         let recognizer = tokio::task::spawn_blocking(move || -> Result<OfflineRecognizer> {
-            let mut config = OfflineRecognizerConfig::default();
-            config.model_config = OfflineModelConfig {
-                moonshine: OfflineMoonshineModelConfig {
-                    preprocessor: Some(path_to_string(&preprocess)),
-                    encoder: Some(path_to_string(&encoder)),
-                    cached_decoder: Some(path_to_string(&cached_decoder)),
-                    uncached_decoder: Some(path_to_string(&uncached_decoder)),
-                    merged_decoder: None,
+            let config = OfflineRecognizerConfig {
+                model_config: OfflineModelConfig {
+                    moonshine: OfflineMoonshineModelConfig {
+                        preprocessor: Some(path_to_string(&preprocess)),
+                        encoder: Some(path_to_string(&encoder)),
+                        cached_decoder: Some(path_to_string(&cached_decoder)),
+                        uncached_decoder: Some(path_to_string(&uncached_decoder)),
+                        merged_decoder: None,
+                    },
+                    tokens: Some(path_to_string(&tokens)),
+                    num_threads: threads as i32,
+                    debug: false,
+                    ..Default::default()
                 },
-                tokens: Some(path_to_string(&tokens)),
-                num_threads: threads as i32,
-                debug: false,
                 ..Default::default()
             };
             OfflineRecognizer::create(&config)

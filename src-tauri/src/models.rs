@@ -377,7 +377,7 @@ fn moonshine_download_lock() -> &'static Mutex<()> {
 }
 
 /// Returns the path to the Moonshine model directory, downloading
-/// + extracting from the upstream sherpa-onnx release archive
+/// and extracting from the upstream sherpa-onnx release archive
 /// first if needed.
 pub async fn ensure_moonshine_ready(app: &AppHandle) -> Result<PathBuf> {
     let _guard = moonshine_download_lock().lock().await;

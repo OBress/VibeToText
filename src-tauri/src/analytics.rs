@@ -290,7 +290,7 @@ fn local_dt(ts: i64) -> DateTime<Local> {
     Local
         .timestamp_opt(ts, 0)
         .single()
-        .unwrap_or_else(|| Local::now())
+        .unwrap_or_else(Local::now)
 }
 
 fn build_last_7_days(utterances: &[Utterance]) -> Vec<DayBucket> {

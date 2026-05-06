@@ -489,10 +489,10 @@ fn transcribe_one(
     // 30 s clips with mostly-silence tails) and gives the EOT-vs-
     // continue decision a clearer margin.
     const TRAILING_PAD_MS: usize = 1500;
-    let pad_samples = (cfg.sampling_rate as usize) * TRAILING_PAD_MS / 1000;
+    let pad_samples = cfg.sampling_rate * TRAILING_PAD_MS / 1000;
     let mut padded: Vec<f32> = Vec::with_capacity(samples.len() + pad_samples);
     padded.extend_from_slice(samples);
-    padded.extend(std::iter::repeat(0.0_f32).take(pad_samples));
+    padded.extend(std::iter::repeat_n(0.0_f32, pad_samples));
     let samples: &[f32] = &padded;
 
     let mut stft = Spectrogram::new(cfg.n_fft, cfg.hop_length);

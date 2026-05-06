@@ -45,6 +45,7 @@ pub struct AppConfig {
     ///   - "whisper": faster-whisper-* via ct2rs. Slower on CPU
     ///     (~3-5× RTFx for small.en) but offers wider model
     ///     selection + multilingual.
+    ///
     /// GPU mode always uses Whisper regardless of this setting —
     /// Moonshine doesn't have a CUDA path.
     #[serde(default = "default_cpu_engine")]

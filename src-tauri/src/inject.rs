@@ -49,7 +49,7 @@ pub fn paste_text(app: &AppHandle, s: &str) -> Result<()> {
             }
         }
         iter += 1;
-        if iter % 5 == 0 {
+        if iter.is_multiple_of(5) {
             let _ = cb.write_text(target.to_string());
         }
         // Backoff: double up to the cap. Keeps tight loops cheap on
