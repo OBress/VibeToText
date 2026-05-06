@@ -79,6 +79,37 @@ jobs:
             libasound2-dev \
             cmake
 
+      # CT2 needs CUDA headers at COMPILE time even with the
+      # `cuda-dynamic-loading` feature (which only delays the
+      # libcuda.so/cudart link to runtime — the build still emits
+      # CUDA kernel code). The runner doesn't ship CUDA, so we
+      # install the toolkit here. The resulting binary still works
+      # on machines without an NVIDIA GPU thanks to dynamic loading.
+      - name: Install CUDA Toolkit (Linux + Windows)
+        if: runner.os != 'macOS'
+        uses: Jimver/cuda-toolkit@v0.2.19
+        with:
+          cuda: "12.5.0"
+          method: "network"
+          # Trim the install to the subpackages CT2 actually needs —
+          # full CUDA is ~3 GB, this gets us under 1 GB.
+          sub-packages: '["nvcc", "cudart", "cublas", "cublas_dev", "cuda_runtime"]'
+          non-cuda-sub-packages: '[]'
+
+      # CT2's CMake config uses the deprecated FindCUDA module, which
+      # mis-parses Windows paths containing backslash-P (it treats
+      # `\Program` as a C-style escape). cuda-toolkit sets CUDA_PATH
+      # with backslashes; we rewrite to forward slashes which both
+      # CMake and msbuild accept on Windows.
+      - name: Normalize Windows CUDA_PATH to forward slashes
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $cuda = $env:CUDA_PATH -replace '\\', '/'
+          Write-Host "Normalized CUDA_PATH: $cuda"
+          "CUDA_PATH=$cuda" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "CUDA_TOOLKIT_ROOT_DIR=$cuda" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
       - name: Install macOS build deps
         if: runner.os == 'macOS'
         run: |

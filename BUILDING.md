@@ -18,6 +18,23 @@ test the GPU path during development. End-user binaries already work
 on machines with or without CUDA via dynamic loading, so you don't
 need it just to build a release.
 
+> ### Windows + CUDA: forward-slash workaround
+>
+> If you have CUDA installed for local Windows dev, you'll hit a
+> CMake build error in CT2 because its FindCUDA module mis-parses
+> backslashes in `CUDA_PATH` (e.g. `C:\Program Files\…` — the `\P`
+> is read as a C escape). Set `CUDA_PATH` with forward slashes
+> before building. PowerShell example you can drop into your
+> profile:
+>
+> ```powershell
+> $env:CUDA_PATH = "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5"
+> $env:CUDA_TOOLKIT_ROOT_DIR = $env:CUDA_PATH
+> ```
+>
+> CMake handles forward slashes on Windows just fine. CI does the
+> same normalization automatically.
+
 ## First clone
 
 ```bash

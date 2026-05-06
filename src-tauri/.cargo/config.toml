@@ -1,26 +1,26 @@
-# Workaround for ct2rs's CUDA build on Windows + CMake 3.28+:
+# NOTE on CUDA_PATH for Windows local dev:
 #
-# CMake's deprecated FindCUDA module (which ct2rs's CMake config
-# still uses) chokes on Windows paths containing `\P` because it
-# interprets the backslash sequence as a string escape. The NVIDIA
-# CUDA installer sets CUDA_PATH with backslashes by default, e.g.
-# `C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.5`, which
-# trips this bug at the `\P` of `\Program Files`.
+# ct2rs's CMake build uses the deprecated FindCUDA module which
+# chokes on Windows paths containing `\P` (backslash-P is parsed as
+# a string escape). The NVIDIA CUDA installer sets CUDA_PATH with
+# backslashes by default — e.g. `C:\Program Files\NVIDIA GPU
+# Computing Toolkit\CUDA\v12.5` — which trips the bug at `\P`.
 #
-# Rewriting CUDA_PATH with forward slashes side-steps the parser
-# bug. CMake handles forward slashes on Windows just fine — they're
-# the recommended form across all platforms.
+# We used to force forward slashes here via `[env]`, but cargo's
+# `[env]` is global (no per-platform conditional), and the override
+# poisoned Linux/macOS CI builds (it set CUDA_TOOLKIT_ROOT_DIR to a
+# Windows path that doesn't exist on those runners, making ct2rs's
+# build script panic).
 #
-# `force = true` makes this win against any pre-existing env var
-# from the user's shell.
-#
-# On macOS / Linux this entry is harmless: ct2rs's `cuda_root()`
-# falls back to other env vars and standard paths, and ultimately
-# to the existence check `path.join("include/cuda.h").is_file()`,
-# which fails for a Windows path on a Unix system.
-[env]
-CUDA_PATH = { value = "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5", force = true }
-CUDA_TOOLKIT_ROOT_DIR = { value = "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5", force = true }
+# Per-platform fix:
+#   - **Windows local dev**: set `CUDA_PATH` with forward slashes in
+#     your shell or a personal `~/.cargo/config.toml`. Example for
+#     PowerShell:
+#         $env:CUDA_PATH = "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5"
+#     See BUILDING.md for the full snippet.
+#   - **CI**: the release workflow has a Windows-only step that
+#     normalizes CUDA_PATH to forward slashes via PowerShell after
+#     the cuda-toolkit action runs.
 
 # Force Rust to use the STATIC C runtime (`/MT`) on Windows MSVC.
 # Required because ct2rs builds CTranslate2's C++ with `static_crt(true)`

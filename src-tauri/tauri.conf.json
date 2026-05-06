@@ -5,7 +5,7 @@
   "identifier": "dev.vibetotext.app",
   "build": {
     "frontendDist": "../src",
-    "beforeBundleCommand": "node ../scripts/stage-bundle-resources.cjs"
+    "beforeBundleCommand": "npm run stage-bundle-resources"
   },
   "app": {
     "withGlobalTauri": true,

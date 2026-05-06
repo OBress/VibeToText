@@ -5,7 +5,8 @@
   "scripts": {
     "tauri": "tauri",
     "dev": "tauri dev",
-    "build": "tauri build"
+    "build": "tauri build",
+    "stage-bundle-resources": "node scripts/stage-bundle-resources.cjs"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.0.0"
