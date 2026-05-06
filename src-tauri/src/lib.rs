@@ -558,6 +558,11 @@ fn register_hotkeys(app: &tauri::AppHandle, cfg: &AppConfig) -> anyhow::Result<(
     }
 
     for (label, combo) in entries {
+        // `canonical` is used only by the Windows modifier-only-hotkey
+        // routing below; on other platforms it's not referenced. The
+        // underscore prefix silences the unused-variable lint there
+        // without needing platform-conditional `let` shadowing.
+        #[cfg_attr(not(target_os = "windows"), allow(unused_variables))]
         let canonical = canonical_combo_str(combo);
 
         // Modifier-only combos (e.g. "Ctrl+Shift") can't be reliably
