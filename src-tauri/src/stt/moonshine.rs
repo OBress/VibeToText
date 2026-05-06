@@ -228,6 +228,19 @@ impl SttBackend for MoonshineBackend {
             }
         }
 
+        // Drain post-cancel frames so we don't lose the user's last
+        // word or two. See the comment on `drain_remaining_audio` in
+        // stt.rs for the full reasoning.
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        let drained = crate::stt::drain_remaining_audio(&audio, &mut buf, max_samples).await;
+        if drained > 0 {
+            log::debug!(
+                "Moonshine: drained {} samples ({:.0} ms) after cancel",
+                drained,
+                drained as f32 * 1000.0 / SAMPLE_RATE_USIZE as f32
+            );
+        }
+
         if buf.len() < SAMPLE_RATE_USIZE / 4 {
             log::info!(
                 "Moonshine: too little audio ({} samples), skipping",

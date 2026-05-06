@@ -361,6 +361,26 @@ impl SttBackend for WhisperBackend {
             }
         }
 
+        // Drain anything cpal already pushed but our consumer hadn't
+        // pulled when `cancel` flipped. Without this we lose the
+        // final 20-200 ms of audio — the user's last word or two —
+        // because the stop sequence is:
+        //   1. stop_dictation sets cancel=true
+        //   2. cpal callback fires once or twice more before its
+        //      stream is dropped, pushing frames into our channel
+        //   3. our loop sees cancel and exits, leaving those frames
+        //      stranded
+        // We also wait a beat for cpal's tail callbacks to land.
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        let drained = crate::stt::drain_remaining_audio(&audio, &mut buf, max_samples).await;
+        if drained > 0 {
+            log::debug!(
+                "Whisper: drained {} samples ({:.0} ms) after cancel",
+                drained,
+                drained as f32 * 1000.0 / SAMPLE_RATE as f32
+            );
+        }
+
         if buf.len() < SAMPLE_RATE as usize / 4 {
             log::info!(
                 "Whisper: too little audio ({} samples), skipping",

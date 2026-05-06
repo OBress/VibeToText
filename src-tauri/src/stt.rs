@@ -31,6 +31,33 @@ use tokio::{sync::Mutex, task::JoinHandle};
 pub use moonshine::MoonshineBackend;
 pub use whisper::WhisperBackend;
 
+/// Drain any frames cpal already pushed into the audio channel but
+/// the backend loop hadn't pulled before `cancel` flipped. Returns
+/// the number of samples appended. Used by both backends after their
+/// main capture loop exits — without this they lose the last
+/// ~20-200 ms of audio (the user's final word or two) because
+/// stop_dictation sets cancel BEFORE cpal's last callback delivers.
+pub(crate) async fn drain_remaining_audio(
+    audio: &Arc<Mutex<Option<crate::audio::AudioCapture>>>,
+    buf: &mut Vec<f32>,
+    max_samples: usize,
+) -> usize {
+    let mut drained = 0usize;
+    let guard = audio.lock().await;
+    let Some(a) = guard.as_ref() else {
+        return 0;
+    };
+    while let Ok(frame) = a.frames.try_recv() {
+        let take = max_samples.saturating_sub(buf.len()).min(frame.0.len());
+        if take == 0 {
+            break;
+        }
+        buf.extend_from_slice(&frame.0[..take]);
+        drained += take;
+    }
+    drained
+}
+
 /// Trait every transcription backend implements. `run` consumes audio
 /// frames until `cancel` flips, then finalizes and injects the transcript.
 #[async_trait]
