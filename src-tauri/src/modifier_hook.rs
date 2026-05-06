@@ -28,7 +28,7 @@
 
 #![cfg(target_os = "windows")]
 
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::mpsc::{channel, Sender};
 use std::sync::{Mutex, OnceLock};
 use tauri::AppHandle;
@@ -70,13 +70,49 @@ const D_RWIN: u8 = 1 << 7;
 
 static WATCH_MASK: AtomicU32 = AtomicU32::new(0);
 static HELD_DETAIL: AtomicU8 = AtomicU8::new(0);
-static OTHER_KEYS_HELD: AtomicU32 = AtomicU32::new(0);
+// Bitmap of "is this VKey currently held" indexed by VKey (0..256).
+// We use a bitset rather than a counter because Windows Raw Input
+// delivers auto-repeat keydowns as additional MAKE events (without
+// a matching BREAK between them) — a counter would inflate on every
+// repeat tick and stay positive long after the user released. With
+// a bitset, a make is idempotent (set bit) and a break clears the
+// bit; `other_keys_count()` reads the popcount.
+static OTHER_KEYS_HELD_BITS: [AtomicU64; 4] = [
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+];
 static INVALIDATED: AtomicBool = AtomicBool::new(false);
 static STARTED: AtomicBool = AtomicBool::new(false);
 static WAS_MATCHING: AtomicBool = AtomicBool::new(false);
 static START_GEN: AtomicU32 = AtomicU32::new(0);
 static SENDER: OnceLock<Mutex<Sender<bool>>> = OnceLock::new();
 static LAST_EVENT_MS: AtomicI64 = AtomicI64::new(0);
+
+fn other_keys_set(vk: u16) {
+    let idx = (vk as usize) & 0xFF;
+    let word = idx / 64;
+    let bit = idx % 64;
+    OTHER_KEYS_HELD_BITS[word].fetch_or(1u64 << bit, Ordering::Relaxed);
+}
+fn other_keys_clear(vk: u16) {
+    let idx = (vk as usize) & 0xFF;
+    let word = idx / 64;
+    let bit = idx % 64;
+    OTHER_KEYS_HELD_BITS[word].fetch_and(!(1u64 << bit), Ordering::Relaxed);
+}
+fn other_keys_count() -> u32 {
+    OTHER_KEYS_HELD_BITS
+        .iter()
+        .map(|w| w.load(Ordering::Relaxed).count_ones())
+        .sum()
+}
+fn other_keys_clear_all() {
+    for w in OTHER_KEYS_HELD_BITS.iter() {
+        w.store(0, Ordering::Relaxed);
+    }
+}
 
 const START_DEBOUNCE_MS: u64 = 45;
 
@@ -115,6 +151,12 @@ pub fn set_watch_mask(mask: u32) {
     STARTED.store(false, Ordering::SeqCst);
     WAS_MATCHING.store(false, Ordering::SeqCst);
     START_GEN.fetch_add(1, Ordering::SeqCst);
+    // Clear any phantom held-key state from before the rebind. If the
+    // user was holding keys when the prior hotkey was set, those bits
+    // could otherwise persist across the rebind and cause the new
+    // combo to be permanently invalidated.
+    HELD_DETAIL.store(0, Ordering::SeqCst);
+    other_keys_clear_all();
 }
 
 /// Install the global Raw Input listener. Idempotent.
@@ -312,9 +354,10 @@ unsafe fn process_raw_input(h: HRAWINPUT) {
         let next = if is_down { prev | b } else { prev & !b };
         HELD_DETAIL.store(next, Ordering::Relaxed);
     } else if is_down {
-        OTHER_KEYS_HELD.fetch_add(1, Ordering::Relaxed);
-    } else if OTHER_KEYS_HELD.load(Ordering::Relaxed) > 0 {
-        OTHER_KEYS_HELD.fetch_sub(1, Ordering::Relaxed);
+        // Idempotent set — auto-repeat keydowns just re-set the bit.
+        other_keys_set(kb.VKey);
+    } else {
+        other_keys_clear(kb.VKey);
     }
 
     recompute_state();
@@ -347,7 +390,7 @@ fn recompute_state() {
     }
     let detail = HELD_DETAIL.load(Ordering::Relaxed);
     let held = detail_to_mask(detail);
-    let other = OTHER_KEYS_HELD.load(Ordering::Relaxed);
+    let other = other_keys_count();
 
     if detail == 0 && other == 0 {
         INVALIDATED.store(false, Ordering::Relaxed);
@@ -395,7 +438,7 @@ fn recompute_state() {
                 return;
             }
             let still_held = detail_to_mask(HELD_DETAIL.load(Ordering::Relaxed));
-            let still_other = OTHER_KEYS_HELD.load(Ordering::Relaxed);
+            let still_other = other_keys_count();
             if still_held != WATCH_MASK.load(Ordering::Relaxed) || still_other != 0 {
                 log::debug!(
                     "modifier_hook: debounce: state changed (held={still_held:#x} other={still_other}), dropping press"

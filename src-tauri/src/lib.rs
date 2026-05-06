@@ -1162,7 +1162,27 @@ pub(crate) async fn start_dictation(app: &tauri::AppHandle) -> anyhow::Result<()
     // Suppress duplicate starts (auto-repeat keydowns from Windows
     // while the dictate hotkey is still held). swap returns the
     // PREVIOUS value — true means a start is already in flight.
+    //
+    // When the user presses again WHILE a previous start is still
+    // loading the model (e.g., they tapped the hotkey, released
+    // before the model loaded, then tapped again), we don't try to
+    // start a second instance — but we still re-show the overlay
+    // and re-emit the "warming" state so the user gets visual
+    // feedback that their press was heard. Without this they see a
+    // popup the first time and then nothing on subsequent presses
+    // until the in-flight start finishes cancelling.
     if state.starting.swap(true, AtomicOrdering::SeqCst) {
+        log::debug!("start_dictation: duplicate press while loading; refreshing overlay");
+        // Cancel the previous in-flight start so the user's new
+        // press takes priority instead of getting silently dropped
+        // when the in-flight one finishes. The in-flight task polls
+        // start_cancel at every await point and bails cleanly.
+        // (We deliberately do NOT call stop_dictation here — there
+        // may not be a session to stop yet.)
+        state.start_cancel.store(true, AtomicOrdering::SeqCst);
+        // Surface UI again so the user knows the press registered.
+        let _ = app.emit("dictation-state", "warming");
+        show_overlay(app);
         return Ok(());
     }
     // Reset the cancel flag for this new press cycle.
