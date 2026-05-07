@@ -229,16 +229,19 @@ jobs:
           rm -rf src-tauri/target/release/build/sherpa-onnx-sys-* || true
 
       # tauri-build's `generate_context!()` macro validates every
-      # `bundle.resources` source path at COMPILE TIME (during
-      # `cargo build`), so the DLL stubs need to exist before cargo
-      # runs. The real DLLs aren't produced until cargo finishes (by
-      # sherpa-onnx-sys's build script). Pre-create empty placeholder
-      # files; `stage-bundle-resources.cjs` (running as
-      # beforeBundleCommand AFTER the build) overwrites them with the
-      # real DLLs from target/<triple>/release/ before the bundler
-      # actually copies them into the installer.
+      # `bundle.resources` source path at COMPILE TIME on EVERY
+      # platform (the resources field is global, not per-OS). The
+      # real DLLs aren't produced until cargo finishes (by
+      # sherpa-onnx-sys's build script on Windows; on macOS/Linux
+      # we link static + don't ship DLLs but the conf still
+      # references them).
+      #
+      # Pre-create empty placeholder files on every platform so the
+      # macro validation passes. `stage-bundle-resources.cjs` (as
+      # beforeBundleCommand) overwrites them with real DLLs on
+      # Windows; on macOS/Linux the bundler copies the empty stubs
+      # but they're never loaded at runtime so it's harmless.
       - name: Pre-create DLL stubs for tauri-build validation
-        if: runner.os == 'Windows'
         shell: bash
         run: |
           mkdir -p src-tauri/bundle-resources
