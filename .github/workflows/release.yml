@@ -142,7 +142,10 @@ jobs:
         with:
           cuda: "12.6.0"
           method: "local"
-          sub-packages: '["nvcc", "cudart", "cublas", "cublas_dev"]'
+          # CT2 uses curand for RNG in some CUDA kernels (random.cu →
+          # curand_kernel.h). Without it we get
+          # `Cannot open include file: 'curand_kernel.h'`.
+          sub-packages: '["nvcc", "cudart", "cublas", "cublas_dev", "curand", "curand_dev"]'
 
       # CT2's CMake config uses the deprecated FindCUDA module, which
       # mis-parses Windows paths containing backslash-P (it treats
