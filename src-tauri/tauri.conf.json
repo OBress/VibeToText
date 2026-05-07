@@ -58,9 +58,12 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": [
-      "bundle-resources/**/*"
-    ],
+    "resources": {
+      "bundle-resources/sherpa-onnx-c-api.dll": "./sherpa-onnx-c-api.dll",
+      "bundle-resources/sherpa-onnx-cxx-api.dll": "./sherpa-onnx-cxx-api.dll",
+      "bundle-resources/onnxruntime.dll": "./onnxruntime.dll",
+      "bundle-resources/onnxruntime_providers_shared.dll": "./onnxruntime_providers_shared.dll"
+    },
     "category": "Productivity",
     "shortDescription": "Local push-to-talk dictation",
     "longDescription": "VibeToText captures your voice via a global hotkey and pastes the transcript wherever your cursor is. 100% on-device — Whisper (CTranslate2, GPU/CPU) + Moonshine base-en (sherpa-onnx, CPU).",

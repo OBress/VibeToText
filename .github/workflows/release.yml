@@ -228,6 +228,25 @@ jobs:
           rm -rf src-tauri/target/${{ matrix.target }}/release/build/sherpa-onnx-sys-* || true
           rm -rf src-tauri/target/release/build/sherpa-onnx-sys-* || true
 
+      # tauri-build's `generate_context!()` macro validates every
+      # `bundle.resources` source path at COMPILE TIME (during
+      # `cargo build`), so the DLL stubs need to exist before cargo
+      # runs. The real DLLs aren't produced until cargo finishes (by
+      # sherpa-onnx-sys's build script). Pre-create empty placeholder
+      # files; `stage-bundle-resources.cjs` (running as
+      # beforeBundleCommand AFTER the build) overwrites them with the
+      # real DLLs from target/<triple>/release/ before the bundler
+      # actually copies them into the installer.
+      - name: Pre-create DLL stubs for tauri-build validation
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          mkdir -p src-tauri/bundle-resources
+          touch src-tauri/bundle-resources/sherpa-onnx-c-api.dll
+          touch src-tauri/bundle-resources/sherpa-onnx-cxx-api.dll
+          touch src-tauri/bundle-resources/onnxruntime.dll
+          touch src-tauri/bundle-resources/onnxruntime_providers_shared.dll
+
       - name: Build app (release)
         env:
           # CUDA 11.8's host_config.h hard-rejects MSVC toolset
