@@ -50,12 +50,15 @@ jobs:
             bundles: dmg
             artifact_name: vibe-to-text-macos-arm64
 
-          # macOS x86_64 — older Intel Macs. `macos-13` is the last
-          # GH-hosted Intel runner generation as of 2025.
-          - os: macos-13
-            target: x86_64-apple-darwin
-            bundles: dmg
-            artifact_name: vibe-to-text-macos-x64
+          # macOS x86_64: dropped from the release matrix.
+          # GH-hosted `macos-13` runners (last Intel generation
+          # available) are extremely scarce; previous attempts sat
+          # in the queue for 40+ minutes per attempt, blocking the
+          # whole release. Apple Silicon has been the default since
+          # 2020 and the arm64 build runs cleanly under Rosetta 2
+          # on any Intel Mac. If we ever need a native Intel build
+          # we can re-add this row, but for v0.1.x we ship arm64
+          # only on macOS.
 
           # Linux x86_64 — `.deb` only. AppImage builds via Tauri's
           # bundled linuxdeploy fail on the GH-hosted ubuntu-22.04
