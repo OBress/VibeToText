@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use crossbeam_channel::{bounded, Receiver, Sender};
+use serde::Serialize;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -15,6 +16,13 @@ pub struct Frame(pub Vec<f32>);
 /// if the UI consumer is slow.
 #[derive(Clone, Copy, Debug)]
 pub struct Level(pub f32);
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InputDeviceInfo {
+    pub name: String,
+    pub is_default: bool,
+}
 
 pub struct AudioCapture {
     stop: Arc<AtomicBool>,
@@ -73,6 +81,27 @@ impl AudioCapture {
     pub fn stop(&self) {
         self.stop.store(true, Ordering::SeqCst);
     }
+}
+
+pub fn input_devices() -> Result<Vec<InputDeviceInfo>> {
+    let host = cpal::default_host();
+    let default_name = host.default_input_device().and_then(|d| d.name().ok());
+    let mut devices = Vec::new();
+
+    for device in host.input_devices()? {
+        let Ok(name) = device.name() else {
+            continue;
+        };
+        let is_default = default_name.as_ref() == Some(&name);
+        devices.push(InputDeviceInfo { name, is_default });
+    }
+
+    devices.sort_by(|a, b| match (a.is_default, b.is_default) {
+        (true, false) => std::cmp::Ordering::Less,
+        (false, true) => std::cmp::Ordering::Greater,
+        _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+    });
+    Ok(devices)
 }
 
 fn run_stream(
