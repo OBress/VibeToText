@@ -1,5 +1,7 @@
 use anyhow::Result;
-use enigo::{Direction, Enigo, Key, Keyboard, Settings};
+#[cfg(not(target_os = "macos"))]
+use enigo::Key;
+use enigo::{Direction, Enigo, Keyboard, Settings};
 use tauri::AppHandle;
 use tauri_plugin_clipboard_manager::ClipboardExt;
 
@@ -74,15 +76,7 @@ pub fn paste_text(app: &AppHandle, s: &str) -> Result<()> {
         );
     }
 
-    let mut enigo = Enigo::new(&Settings::default())?;
-    #[cfg(target_os = "macos")]
-    let mod_key = Key::Meta;
-    #[cfg(not(target_os = "macos"))]
-    let mod_key = Key::Control;
-
-    enigo.key(mod_key, Direction::Press)?;
-    enigo.key(Key::Unicode('v'), Direction::Click)?;
-    enigo.key(mod_key, Direction::Release)?;
+    send_paste_shortcut()?;
 
     // Restore the user's previous clipboard contents. CRITICAL: there's
     // no API for "the foreground app finished consuming this paste,"
@@ -134,5 +128,25 @@ pub fn paste_text(app: &AppHandle, s: &str) -> Result<()> {
     } else {
         log::debug!("paste_text: no previous clipboard text to restore (was image / file / empty)");
     }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn send_paste_shortcut() -> Result<()> {
+    let mut enigo = Enigo::new(&Settings::default())?;
+    // macOS keycode 55 = Command, 9 = V. Using raw keycodes avoids Enigo's
+    // layout lookup path, which must run on the main dispatch queue.
+    enigo.raw(55, Direction::Press)?;
+    enigo.raw(9, Direction::Click)?;
+    enigo.raw(55, Direction::Release)?;
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn send_paste_shortcut() -> Result<()> {
+    let mut enigo = Enigo::new(&Settings::default())?;
+    enigo.key(Key::Control, Direction::Press)?;
+    enigo.key(Key::Unicode('v'), Direction::Click)?;
+    enigo.key(Key::Control, Direction::Release)?;
     Ok(())
 }
