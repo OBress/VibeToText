@@ -25,7 +25,6 @@ const fields = [
   "toggle_settings_hotkey",
   "dictate_hotkey",
   "stt_toggle_hotkey",
-  "mic_device",
 ];
 
 async function loadConfig() {
@@ -47,6 +46,7 @@ async function loadConfig() {
     const el = document.getElementById(k);
     if (el) el.value = cfg[toCamel(k)] ?? "";
   }
+  await refreshMicrophones(cfg.micDevice || "");
   document.getElementById("trailing_space").checked = !!cfg.trailingSpace;
   // STT master toggle. cfg.sttEnabled defaults to true if missing on
   // older configs that didn't have the field.
@@ -114,6 +114,55 @@ function applyModelPickerVisibility(mode, cpuEngine) {
 
 function toCamel(s) {
   return s.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
+}
+
+async function refreshMicrophones(selected = val("mic_device")) {
+  const select = document.getElementById("mic_device");
+  const hint = document.getElementById("mic_device_hint");
+  if (!select) return;
+
+  try {
+    const devices = await invoke("list_input_devices");
+    select.innerHTML = "";
+
+    const defaultDevice = devices.find((d) => d.isDefault);
+    select.appendChild(
+      new Option(
+        defaultDevice
+          ? `(system default — ${defaultDevice.name})`
+          : "(system default)",
+        ""
+      )
+    );
+
+    for (const device of devices) {
+      const label = device.isDefault ? `${device.name} — default` : device.name;
+      select.appendChild(new Option(label, device.name));
+    }
+
+    if (selected && !devices.some((d) => d.name === selected)) {
+      select.appendChild(new Option(`${selected} — not currently available`, selected));
+    }
+
+    select.value = selected || "";
+    select.disabled = devices.length === 0;
+    if (hint) {
+      hint.textContent =
+        devices.length === 0
+          ? "No microphones found"
+          : `${devices.length} microphone${devices.length === 1 ? "" : "s"} available`;
+    }
+  } catch (e) {
+    console.error("failed to list microphones:", e);
+    select.innerHTML = "";
+    select.appendChild(new Option("(system default)", ""));
+    select.value = selected || "";
+    if (selected) {
+      select.appendChild(new Option(`${selected} — saved`, selected));
+      select.value = selected;
+    }
+    if (hint) hint.textContent = "Microphones unavailable";
+  }
 }
 
 const HOTKEY_DEFAULTS = {
@@ -282,15 +331,8 @@ function wireAutoSave() {
   if (auto) auto.addEventListener("change", () => scheduleSave({ immediate: true }));
   const stt = document.getElementById("stt_enabled");
   if (stt) stt.addEventListener("change", () => scheduleSave({ immediate: true }));
-  // Free-text fields — debounce so typing isn't one save per keystroke.
-  ["mic_device"].forEach((id) => {
-    const el = document.getElementById(id);
-    if (!el) return;
-    el.addEventListener("input", () => scheduleSave());
-    // Commit immediately when focus leaves so a debounced save in flight
-    // doesn't get stranded.
-    el.addEventListener("blur", () => scheduleSave({ immediate: true }));
-  });
+  const mic = document.getElementById("mic_device");
+  if (mic) mic.addEventListener("change", () => scheduleSave({ immediate: true }));
   // Multi-line text fields (initial prompt, custom dictionary).
   // Same debounce-on-input + commit-on-blur pattern.
   ["whisper_initial_prompt", "custom_dictionary"].forEach((id) => {
@@ -1054,6 +1096,7 @@ listen("settings-shown", () => {
   // Force reflow so the next class-add re-runs the keyframes.
   void body.offsetWidth;
   body.classList.add("show-pop");
+  refreshMicrophones();
 });
 
 // Kept for forward-compatibility — currently we always select "whisper".

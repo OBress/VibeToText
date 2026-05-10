@@ -172,8 +172,11 @@
           </label>
           <label>
             <span>Microphone</span>
-            <input id="mic_device" placeholder="(system default)" />
+            <select id="mic_device">
+              <option value="">(system default)</option>
+            </select>
           </label>
+          <p id="mic_device_hint" class="hint small">Microphones: checking…</p>
           <label class="toggle compact">
             <input type="checkbox" id="auto_start" />
             <span class="toggle-track"><span class="toggle-thumb"></span></span>

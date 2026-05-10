@@ -70,6 +70,11 @@ async fn get_config(state: tauri::State<'_, Arc<AppState>>) -> Result<AppConfig,
 }
 
 #[tauri::command]
+fn list_input_devices() -> Result<Vec<audio::InputDeviceInfo>, String> {
+    audio::input_devices().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn save_config(
     app: tauri::AppHandle,
     state: tauri::State<'_, Arc<AppState>>,
@@ -1176,6 +1181,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_config,
+            list_input_devices,
             save_config,
             toggle_dictation,
             current_backend,
