@@ -152,9 +152,11 @@ fn send_paste_shortcut() -> Result<()> {
 }
 
 fn new_enigo() -> Result<Enigo> {
-    let mut settings = Settings::default();
     // The app asks for Accessibility separately. During dictation, repeatedly
     // opening the system prompt is noisy and can steal focus from the target app.
-    settings.open_prompt_to_get_permissions = false;
+    let settings = Settings {
+        open_prompt_to_get_permissions: false,
+        ..Settings::default()
+    };
     Ok(Enigo::new(&settings)?)
 }
