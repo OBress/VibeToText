@@ -144,7 +144,7 @@ production build matrix.
 2. Update `CHANGELOG.md` with what's new since the last tag.
 3. Commit and push to main.
 4. Tag the commit: `git tag v0.X.Y && git push --tags`.
-5. The `release.yml` workflow runs against all four target platforms
+5. The `release.yml` workflow runs against all target platforms
    (~30–60 min total wall time) and creates a **draft** release with
    the installers attached.
 6. Smoke-test the Windows + macOS installers on real hardware, then

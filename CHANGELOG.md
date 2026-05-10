@@ -40,7 +40,7 @@ backends, cross-platform installers.
   Windows, LaunchAgent on macOS, .desktop on Linux).
 - **Cross-platform installers** built by GitHub Actions on tag
   push: NSIS + MSI on Windows, DMG on macOS (arm64 + x86_64),
-  .deb + .AppImage on Linux.
+  .deb on Linux.
 
 ### Tech notes
 

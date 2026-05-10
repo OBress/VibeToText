@@ -26,9 +26,9 @@ round-trip, no audio leaves your machine.
 
 ### macOS
 
-1. Grab `VibeToText_<version>_aarch64.dmg` from the [latest release](https://github.com/OBress/VibeToText/releases/latest).
-   The arm64 build runs cleanly on Apple Silicon natively and on
-   Intel Macs under Rosetta 2.
+1. Grab the correct DMG from the [latest release](https://github.com/OBress/VibeToText/releases/latest):
+   - Apple Silicon Macs: `VibeToText_<version>_aarch64.dmg`
+   - Intel Macs: `VibeToText_<version>_x64.dmg`
 2. Mount the DMG and drag **VibeToText.app** to `/Applications`.
 3. **First launch:** right-click the app → **Open** → confirm in the
    dialog. macOS Gatekeeper blocks unsigned apps on double-click; the
