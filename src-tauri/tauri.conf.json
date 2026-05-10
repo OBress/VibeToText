@@ -75,7 +75,13 @@
       }
     },
     "macOS": {
-      "minimumSystemVersion": "11.0"
+      "minimumSystemVersion": "11.0",
+      "files": {
+        "MacOS/libsherpa-onnx-c-api.dylib": "bundle-resources/libsherpa-onnx-c-api.dylib",
+        "MacOS/libsherpa-onnx-cxx-api.dylib": "bundle-resources/libsherpa-onnx-cxx-api.dylib",
+        "MacOS/libonnxruntime.dylib": "bundle-resources/libonnxruntime.dylib",
+        "MacOS/libonnxruntime.1.24.4.dylib": "bundle-resources/libonnxruntime.1.24.4.dylib"
+      }
     },
     "linux": {
       "deb": {

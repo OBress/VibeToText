@@ -177,9 +177,10 @@ ct2rs = { version = "0.9", default-features = false, features = [
     "ruy",
     "accelerate",
 ] }
-# sherpa-onnx static — Apple's toolchain has a stable ABI, k2-fsa's
-# prebuilt macOS static libs link cleanly. Single-file .app bundle.
-sherpa-onnx = { version = "1.13", default-features = false, features = ["static"] }
+# sherpa-onnx shared — matches Windows/Linux and avoids uncaught C++
+# exceptions crossing the Rust/static-library boundary during ONNX
+# Runtime session creation on macOS.
+sherpa-onnx = { version = "1.13", default-features = false, features = ["shared"] }
 
 # --- Linux: same CUDA-dynamic-loading story as Windows. ---
 # We could enable `openmp-runtime-comp` here (gomp.lib ships with
