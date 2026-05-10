@@ -103,9 +103,10 @@ codegen-units = 1    # better LTO at cost of build time
 panic = "abort"      # smaller binary, no unwind tables
 ```
 
-Final binary size: ~80 MB on Linux, ~100 MB on Windows (sherpa-onnx
-ships its DLLs alongside, see the Cargo.toml comment for why), ~60 MB
-on macOS. About half of that is the statically-linked CT2 runtime.
+Final binary size: ~80 MB on Linux, ~100 MB on Windows and macOS
+(sherpa-onnx ships shared runtime libraries alongside, see the
+Cargo.toml comments for why). About half of that is the statically-
+linked CT2 runtime.
 
 ## Cross-compilation
 
@@ -134,8 +135,8 @@ production build matrix.
 - `src/index.html`, `src/main.js`, `src/styles.css` — settings + dashboard UI.
 - `src/overlay.html`, `src/overlay.js` — listening waveform overlay.
 - `scripts/stage-bundle-resources.cjs` — staging script the Tauri
-  bundler invokes via `beforeBundleCommand` to copy Windows DLLs into
-  the resources dir.
+  bundler invokes via `beforeBundleCommand` to copy sherpa-onnx /
+  ONNX Runtime shared libraries into the resources dir.
 
 ## Releasing
 
