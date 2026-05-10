@@ -2,7 +2,32 @@
 
 All notable changes to VibeToText.
 
-## [0.1.0] — Unreleased
+## [0.1.1] — 2026-05-10
+
+macOS fixes — the app now actually runs on macOS, and Intel Macs
+get their own native DMG.
+
+### Fixed
+
+- **macOS Moonshine crash on first dictation.** sherpa-onnx was
+  statically linked on macOS and threw an uncaught `Ort::Exception`
+  while creating the ONNX Runtime session. Switched macOS to the
+  `shared` build (matching Windows + Linux); the `.app` now ships
+  `lib{sherpa-onnx,onnxruntime}*.dylib` next to the executable in
+  `Contents/MacOS/`, with an `@executable_path` rpath added at
+  bundle time so dyld resolves them.
+- **Missing Intel Mac DMG.** v0.1.0 only published the arm64 DMG,
+  with a README claim that it would run on Intel under Rosetta 2 —
+  but Rosetta translates Intel → Apple Silicon, not the other
+  direction. The release matrix now includes `macos-13` building
+  `x86_64-apple-darwin`, producing `VibeToText_<version>_x64.dmg`.
+- **CI `cargo check` failing on every PR.** `tauri-build` validates
+  every `bundle.resources` source path at compile time on every
+  platform; build.rs now pre-creates zero-byte stubs for the
+  Windows DLL + macOS dylib paths so local + CI builds don't trip
+  on missing files.
+
+## [0.1.0] — 2026-05-07
 
 First public release. Local push-to-talk dictation with two STT
 backends, cross-platform installers.
