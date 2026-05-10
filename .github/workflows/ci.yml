@@ -65,6 +65,22 @@ jobs:
         working-directory: src-tauri
         run: cargo fmt -- --check
 
+      # tauri-build's `generate_context!()` macro validates every
+      # `bundle.resources` source path at COMPILE TIME on every
+      # platform (the resources field is global, not per-OS), and
+      # cargo check runs the build script. The real DLLs are only
+      # produced by sherpa-onnx-sys's build script on Windows
+      # release builds — on Linux CI they never exist. Pre-create
+      # empty stubs so the validation passes; they're never loaded
+      # at runtime. Mirrors the same step in release.yml.
+      - name: Pre-create DLL stubs for tauri-build validation
+        run: |
+          mkdir -p src-tauri/bundle-resources
+          touch src-tauri/bundle-resources/sherpa-onnx-c-api.dll
+          touch src-tauri/bundle-resources/sherpa-onnx-cxx-api.dll
+          touch src-tauri/bundle-resources/onnxruntime.dll
+          touch src-tauri/bundle-resources/onnxruntime_providers_shared.dll
+
       - name: cargo check
         working-directory: src-tauri
         run: cargo check --all-targets
