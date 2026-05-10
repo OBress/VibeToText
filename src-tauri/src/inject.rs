@@ -9,7 +9,7 @@ use tauri_plugin_clipboard_manager::ClipboardExt;
 /// Used in stream mode for incremental partials.
 #[allow(dead_code)]
 pub fn type_text(s: &str) -> Result<()> {
-    let mut enigo = Enigo::new(&Settings::default())?;
+    let mut enigo = new_enigo()?;
     enigo.text(s)?;
     Ok(())
 }
@@ -133,7 +133,7 @@ pub fn paste_text(app: &AppHandle, s: &str) -> Result<()> {
 
 #[cfg(target_os = "macos")]
 fn send_paste_shortcut() -> Result<()> {
-    let mut enigo = Enigo::new(&Settings::default())?;
+    let mut enigo = new_enigo()?;
     // macOS keycode 55 = Command, 9 = V. Using raw keycodes avoids Enigo's
     // layout lookup path, which must run on the main dispatch queue.
     enigo.raw(55, Direction::Press)?;
@@ -144,9 +144,17 @@ fn send_paste_shortcut() -> Result<()> {
 
 #[cfg(not(target_os = "macos"))]
 fn send_paste_shortcut() -> Result<()> {
-    let mut enigo = Enigo::new(&Settings::default())?;
+    let mut enigo = new_enigo()?;
     enigo.key(Key::Control, Direction::Press)?;
     enigo.key(Key::Unicode('v'), Direction::Click)?;
     enigo.key(Key::Control, Direction::Release)?;
     Ok(())
+}
+
+fn new_enigo() -> Result<Enigo> {
+    let mut settings = Settings::default();
+    // The app asks for Accessibility separately. During dictation, repeatedly
+    // opening the system prompt is noisy and can steal focus from the target app.
+    settings.open_prompt_to_get_permissions = false;
+    Ok(Enigo::new(&settings)?)
 }
