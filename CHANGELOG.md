@@ -2,7 +2,46 @@
 
 All notable changes to VibeToText.
 
-## [0.1.1] — 2026-05-10
+## [0.1.2] — 2026-05-10
+
+macOS usability follow-up to v0.1.1: microphone selection,
+permission strings, and paste injection fixes.
+
+### Added
+
+- **Microphone picker** in the settings UI. Replaces the
+  free-text input field with a populated dropdown driven by a
+  new `list_input_devices` Tauri command (CPAL enumeration).
+  Default device is labeled and pinned to the top; previously-
+  saved devices that are no longer plugged in show as "— not
+  currently available" rather than silently failing.
+- **macOS `NSMicrophoneUsageDescription`** via a bundled
+  `src-tauri/Info.plist`. VibeToText now appears in
+  System Settings → Privacy & Security → Microphone so users
+  can grant + revoke the permission cleanly.
+
+### Fixed
+
+- **macOS paste crash in Cursor (and other Electron apps).**
+  Enigo's `Key::Unicode('v')` path calls keyboard-layout APIs
+  that must run on the main dispatch queue; invoking it from a
+  Tokio worker crashed the process. macOS paste now uses raw
+  HID keycodes (`55` = Cmd, `9` = V) which skip the layout
+  lookup entirely.
+- **Repeated macOS Accessibility prompts** every dictation.
+  Enigo's default settings re-request the permission each time
+  an injector is constructed. We now construct with
+  `open_prompt_to_get_permissions = false` — the app already
+  prompts for Accessibility separately on first use.
+
+## [0.1.1] — 2026-05-10 [skipped]
+
+Tagged but not released — the `macos-13` Intel build sat in
+GitHub Actions' runner queue for 90+ min and never started, so
+the draft release was abandoned in favor of v0.1.2 which rolls
+up both releases' changes.
+
+### Fixed (carried forward into v0.1.2)
 
 macOS fixes — the app now actually runs on macOS, and Intel Macs
 get their own native DMG.
