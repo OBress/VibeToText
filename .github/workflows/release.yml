@@ -75,7 +75,7 @@ jobs:
     timeout-minutes: 90
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
       - name: Install Linux build deps
         if: runner.os == 'Linux'
@@ -107,7 +107,7 @@ jobs:
       # use network there for speed.
       - name: Install CUDA Toolkit (Linux)
         if: runner.os == 'Linux'
-        uses: Jimver/cuda-toolkit@v0.2.19
+        uses: Jimver/cuda-toolkit@4bd727d5619dc6fa323b1e76c3aa5dca94f5ec6d  # v0.2.19
         with:
           cuda: "12.5.0"
           method: "network"
@@ -138,7 +138,7 @@ jobs:
         #     `local` method downloads the full installer up front
         #     (~3 GB) but is more reliable than the streaming
         #     `network` method for Windows runners.
-        uses: Jimver/cuda-toolkit@v0.2.19
+        uses: Jimver/cuda-toolkit@4bd727d5619dc6fa323b1e76c3aa5dca94f5ec6d  # v0.2.19
         with:
           cuda: "12.6.0"
           method: "local"
@@ -187,7 +187,7 @@ jobs:
       # together compile a lot of C++ via CMake on the first build (~25 min
       # on Linux, ~35 min on Windows); the cache cuts incremental rebuilds
       # to ~5 min.
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
         with:
           workspaces: src-tauri
           # Bump the suffix to invalidate the cache after a Cargo.toml
@@ -199,7 +199,7 @@ jobs:
           cache-targets: true
           cache-on-failure: true
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
         with:
           node-version: "20"
 
@@ -278,7 +278,7 @@ jobs:
             -exec cp -v {} artifacts/ \;
           ls -la artifacts/
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: ${{ matrix.artifact_name }}
           path: artifacts/*
@@ -292,10 +292,10 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
       - name: Download all build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
         with:
           path: artifacts
           merge-multiple: true
@@ -304,7 +304,7 @@ jobs:
         run: ls -la artifacts/
 
       - name: Create draft release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2
         with:
           # Always start as a draft — a human reviews + publishes manually
           # after smoke-testing the binaries on real hardware.
